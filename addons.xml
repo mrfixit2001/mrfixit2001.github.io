@@ -120,6 +120,9 @@
             <summary>Aenemapy repo</summary>
             <description>This is just a repo...</description>
             <platform>all</platform>
+            <assets>
+                <icon>icon.png</icon>
+            </assets>
         </extension>
     </addon>
 
