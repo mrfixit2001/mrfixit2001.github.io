@@ -2,16 +2,16 @@
 <addon id="repository.mrfixit2001" name="MrFixit2001 Repository" version="1.0.0" provider-name="mrfixit2001">
     <extension point="xbmc.addon.repository" name="MrFixit2001 Repository">
         <dir>
-            <info compressed="false">https://raw.githubusercontent.com/mrfixit2001/repository.mrfixit2001/main/addons.xml</info>
-            <checksum>https://raw.githubusercontent.com/mrfixit2001/repository.mrfixit2001/main/addons.version</checksum>
-            <datadir zip="true">https://raw.githubusercontent.com/mrfixit2001/repository.mrfixit2001/main/</datadir>
+            <info compressed="false">https://raw.githubusercontent.com/mrfixit2001/mrfixit2001.github.io/main/addons.xml</info>
+            <checksum>https://raw.githubusercontent.com/mrfixit2001/mrfixit2001.github.io/main/addons.version</checksum>
+            <datadir zip="true">https://raw.githubusercontent.com/mrfixit2001/mrfixit2001.github.io/main/</datadir>
             <hashes>false</hashes>
         </dir>
     </extension>
     <extension point="xbmc.addon.metadata">
         <summary>MrFixit2001 Repository</summary>
         <description>Addons preferred by MrFixIt2001, some of which he maintains</description>
-        <source>https://github.com/mrfixit2001/repository.mrfixit2001</source>
+        <source>https://github.com/mrfixit2001/mrfixit2001.github.io</source>
         <platform>all</platform>
         <nofanart>true</nofanart>
         <assets>
