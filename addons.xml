@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addons>
+    <addon id="repository.mrfixit2001" name="MrFixit2001 Repository" version="1.0.0" provider-name="mrfixit2001">
+        <extension point="xbmc.addon.repository" name="MrFixit2001 Repository">
+            <dir>
+                <info compressed="false">https://raw.githubusercontent.com/mrfixit2001/repository.mrfixit2001/main/addons.xml</info>
+                <checksum>https://raw.githubusercontent.com/mrfixit2001/repository.mrfixit2001/main/addons.version</checksum>
+                <datadir zip="true">https://raw.githubusercontent.com/mrfixit2001/repository.mrfixit2001/main/</datadir>
+                <hashes>false</hashes>
+            </dir>
+        </extension>
+        <extension point="xbmc.addon.metadata">
+            <summary>MrFixit2001 Repository</summary>
+            <description>Addons preferred by MrFixIt2001, some of which he maintains</description>
+            <source>https://github.com/mrfixit2001/repository.mrfixit2001</source>
+            <platform>all</platform>
+            <nofanart>true</nofanart>
+            <assets>
+                <icon>mrfixit2001.png</icon>
+            </assets>
+        </extension>
+    </addon>
+
+
+
+    <addon id="plugin.video.kodikaraoke" name="Kodi Karaoke Free" version="1.0.4" provider-name="mrfixit2001">
+    <requires>
+        <import addon="xbmc.python" version="3.0.0"/>
+    </requires>
+    <extension point="xbmc.python.pluginsource" library="default.py">
+            <provides>video</provides>
+    </extension>
+    <extension point="xbmc.addon.metadata">
+        <summary lang="en">Search and Play Karaoke Videos for FREE</summary>
+        <description lang="en">Search and Play Karaoke Videos for FREE</description>
+        <platform>all</platform>
+        <assets>
+            <icon>icon.png</icon>
+        </assets>
+    </extension>
+    </addon>
+
+
+
+    <addon id="plugin.video.ytlite" name="YouTube LITE" version="1.0.4" provider-name="mrfixit2001">
+    <requires>
+        <import addon="xbmc.python" version="3.0.0"/>
+    </requires>
+    <extension point="xbmc.python.pluginsource" library="default.py">
+            <provides>video</provides>
+    </extension>
+    <extension point="xbmc.addon.metadata">
+        <summary lang="en">Search and Bookmark YouTube Videos</summary>
+        <description lang="en">Search and Bookmark YouTube Videos</description>
+        <platform>all</platform>
+        <assets>
+            <icon>icon.png</icon>
+        </assets>
+    </extension>
+    </addon>
+</addons>
