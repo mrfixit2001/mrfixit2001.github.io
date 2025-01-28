@@ -1,6 +1,8 @@
 [submodule "plugin.video.ytlite/plugin.video.ytlite"]
 	path = plugin.video.ytlite/plugin.video.ytlite
 	url = https://github.com/mrfixit2001/plugin.video.ytlite
+	branch = master
 [submodule "plugin.video.kodikaraoke/plugin.video.kodikaraoke"]
 	path = plugin.video.kodikaraoke/plugin.video.kodikaraoke
 	url = https://github.com/mrfixit2001/plugin.video.kodikaraoke
+	branch = master
