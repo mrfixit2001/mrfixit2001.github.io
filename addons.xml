@@ -41,23 +41,6 @@
     </extension>
     </addon>
 
-    <addon id="plugin.video.kodikaraoke" name="Kodi Karaoke Free" version="1.0.9" provider-name="mrfixit2001">
-    <requires>
-        <import addon="xbmc.python" version="3.0.0"/>
-    </requires>
-    <extension point="xbmc.python.pluginsource" library="default.py">
-            <provides>video</provides>
-    </extension>
-    <extension point="xbmc.addon.metadata">
-        <summary lang="en">Search and Play Karaoke Videos for FREE</summary>
-        <description lang="en">Search and Play Karaoke Videos for FREE</description>
-        <platform>all</platform>
-        <assets>
-            <icon>icon.png</icon>
-        </assets>
-    </extension>
-    </addon>
-
     <addon id="plugin.video.kodikaraoke" name="Kodi Karaoke Free" version="1.1.0" provider-name="mrfixit2001">
     <requires>
         <import addon="xbmc.python" version="3.0.0"/>
@@ -75,10 +58,7 @@
     </extension>
     </addon>
 
-
-
-	<!--- YouTube LITE -->
-    <addon id="plugin.video.ytlite" name="YouTube LITE" version="1.0.6" provider-name="mrfixit2001">
+    <addon id="plugin.video.kodikaraoke" name="Kodi Karaoke Free" version="1.1.1" provider-name="mrfixit2001">
     <requires>
         <import addon="xbmc.python" version="3.0.0"/>
     </requires>
@@ -86,8 +66,8 @@
             <provides>video</provides>
     </extension>
     <extension point="xbmc.addon.metadata">
-        <summary lang="en">Search and Bookmark YouTube Videos</summary>
-        <description lang="en">Search and Bookmark YouTube Videos</description>
+        <summary lang="en">Search and Play Karaoke Videos for FREE</summary>
+        <description lang="en">Search and Play Karaoke Videos for FREE</description>
         <platform>all</platform>
         <assets>
             <icon>icon.png</icon>
@@ -95,7 +75,9 @@
     </extension>
     </addon>
 
-    <addon id="plugin.video.ytlite" name="YouTube LITE" version="1.0.9" provider-name="mrfixit2001">
+
+	<!--- YouTube LITE -->
+    <addon id="plugin.video.ytlite" name="YouTube LITE" version="1.0.6" provider-name="mrfixit2001">
     <requires>
         <import addon="xbmc.python" version="3.0.0"/>
     </requires>
@@ -129,6 +111,22 @@
     </extension>
     </addon>
 
+    <addon id="plugin.video.ytlite" name="YouTube LITE" version="1.1.1" provider-name="mrfixit2001">
+    <requires>
+        <import addon="xbmc.python" version="3.0.0"/>
+    </requires>
+    <extension point="xbmc.python.pluginsource" library="default.py">
+            <provides>video</provides>
+    </extension>
+    <extension point="xbmc.addon.metadata">
+        <summary lang="en">Search and Bookmark YouTube Videos</summary>
+        <description lang="en">Search and Bookmark YouTube Videos</description>
+        <platform>all</platform>
+        <assets>
+            <icon>icon.png</icon>
+        </assets>
+    </extension>
+    </addon>
 
 
 	<!--- OTHER REPOSITORIES -->
