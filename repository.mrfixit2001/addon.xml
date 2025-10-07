@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="repository.mrfixit2001" name="MrFixit2001 Repository" version="1.0.2" provider-name="mrfixit2001">
+<addon id="repository.mrfixit2001" name="MrFixit2001 Repository" version="1.0.3" provider-name="mrfixit2001">
     <extension point="xbmc.addon.repository" name="MrFixit2001 Repository">
         <dir>
             <info compressed="false">https://raw.githubusercontent.com/mrfixit2001/mrfixit2001.github.io/main/addons.xml</info>

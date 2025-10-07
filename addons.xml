@@ -21,6 +21,26 @@
         </extension>
     </addon>
 
+    <addon id="repository.mrfixit2001" name="MrFixit2001 Repository" version="1.0.3" provider-name="mrfixit2001">
+        <extension point="xbmc.addon.repository" name="MrFixit2001 Repository">
+            <dir>
+                <info compressed="false">https://raw.githubusercontent.com/mrfixit2001/mrfixit2001.github.io/main/addons.xml</info>
+                <checksum>https://raw.githubusercontent.com/mrfixit2001/mrfixit2001.github.io/main/addons.version</checksum>
+                <datadir zip="true">https://raw.githubusercontent.com/mrfixit2001/mrfixit2001.github.io/main/</datadir>
+                <hashes>false</hashes>
+            </dir>
+        </extension>
+        <extension point="xbmc.addon.metadata">
+            <summary>MrFixit2001 Repository</summary>
+            <description>Addons preferred by MrFixIt2001, some of which he maintains</description>
+            <source>https://github.com/mrfixit2001/mrfixit2001.github.io</source>
+            <platform>all</platform>
+            <nofanart>true</nofanart>
+            <assets>
+                <icon>mrfixit2001.png</icon>
+            </assets>
+        </extension>
+    </addon>
 
 
 	<!--- KODI KARAOKE -->
@@ -273,6 +293,56 @@
             <assets>
                 <icon>icon.png</icon>
                 <fanart>icon.png</fanart>
+            </assets>
+        </extension>
+    </addon>
+
+    <addon id="repository.Magnetic" name="Magnetic Repo" version="1.1.0b" provider-name="1-cool-guy">
+        <requires>
+            <import addon="xbmc.addon" version="12.0.0"/>
+        </requires>
+        <extension point="xbmc.addon.repository" name="Magnetic Repo">
+            <dir>
+                <info compressed="false">https://magnetic.website/__zips/addons.xml</info>
+                <checksum>https://magnetic.website/__zips/addons.xml.md5</checksum>
+                <datadir zip="true">https://magnetic.website/__zips/</datadir>
+                <hashes>false</hashes>
+            </dir>
+            <dir>
+                <info compressed="false">https://raw.githubusercontent.com/teamuniversal/scrapers/master/_modules4all/zips/addons.xml</info>
+                <checksum>https://raw.githubusercontent.com/teamuniversal/scrapers/master/_modules4all/zips/addons.xml.md5</checksum>
+                <datadir zip="true">https://raw.githubusercontent.com/teamuniversal/scrapers/master/_modules4all/zips/</datadir>
+                <hashes>false</hashes>
+            </dir>
+            <dir>
+                <info compressed="false">https://raw.githubusercontent.com/totalrevolution/python-koding/master/zips/addons.xml</info>
+                <checksum>https://raw.githubusercontent.com/totalrevolution/python-koding/master/zips/addons.xml.md5</checksum>
+                <datadir zip="true">https://raw.githubusercontent.com/totalrevolution/python-koding/master/zips/</datadir>
+            </dir>
+            <dir>
+                <info compressed="false">https://raw.githubusercontent.com/jenaddon/repository.jenrepo/master/zips/addons.xml</info>
+                <checksum>https://raw.githubusercontent.com/jenaddon/repository.jenrepo/master/zips/addons.xml.md5</checksum>
+                <datadir zip="true">https://raw.githubusercontent.com/jenaddon/repository.jenrepo/master/zips/</datadir>
+                <hashes>false</hashes>
+            </dir>	
+            <dir>
+                <info compressed="false">https://raw.githubusercontent.com/a4k-openproject/repository.openscrapers/master/zips/addons.xml</info>
+                <checksum>https://raw.githubusercontent.com/a4k-openproject/repository.openscrapers/master/zips/addons.xml.md5</checksum>
+                <datadir zip="true">https://raw.githubusercontent.com/a4k-openproject/repository.openscrapers/master/zips/</datadir>
+            </dir>
+            <dir>
+                <info compressed="false">https://raw.githubusercontent.com/Gujal00/smrzips/master/addons.xml</info>
+                <checksum>https://raw.githubusercontent.com/Gujal00/smrzips/master/addons.xml.md5</checksum>
+                <datadir zip="true">https://raw.githubusercontent.com/Gujal00/smrzips/master/zips/</datadir>
+            </dir>
+        </extension>
+        <extension point="xbmc.addon.metadata">
+            <summary>Official Magnetic Repository</summary>
+            <description>Welcome to magnetic repo. Please enjoy</description>
+            <platform>all</platform>
+            <genre>movies,usa</genre>
+            <assets>
+                <icon>icon.png</icon>
             </assets>
         </extension>
     </addon>
