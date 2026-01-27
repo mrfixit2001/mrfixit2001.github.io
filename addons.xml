@@ -61,7 +61,7 @@
     </extension>
     </addon>
 
-    <addon id="plugin.video.kodikaraoke" name="Kodi Karaoke Free" version="1.1.0" provider-name="mrfixit2001">
+    <addon id="plugin.video.kodikaraoke" name="Kodi Karaoke Free" version="1.1.1" provider-name="mrfixit2001">
     <requires>
         <import addon="xbmc.python" version="3.0.0"/>
     </requires>
@@ -78,7 +78,7 @@
     </extension>
     </addon>
 
-    <addon id="plugin.video.kodikaraoke" name="Kodi Karaoke Free" version="1.1.1" provider-name="mrfixit2001">
+    <addon id="plugin.video.kodikaraoke" name="Kodi Karaoke Free" version="1.1.2" provider-name="mrfixit2001">
     <requires>
         <import addon="xbmc.python" version="3.0.0"/>
     </requires>
@@ -114,7 +114,7 @@
     </extension>
     </addon>
 
-    <addon id="plugin.video.ytlite" name="YouTube LITE" version="1.1.0" provider-name="mrfixit2001">
+    <addon id="plugin.video.ytlite" name="YouTube LITE" version="1.1.1" provider-name="mrfixit2001">
     <requires>
         <import addon="xbmc.python" version="3.0.0"/>
     </requires>
@@ -131,7 +131,7 @@
     </extension>
     </addon>
 
-    <addon id="plugin.video.ytlite" name="YouTube LITE" version="1.1.1" provider-name="mrfixit2001">
+    <addon id="plugin.video.ytlite" name="YouTube LITE" version="1.1.2" provider-name="mrfixit2001">
     <requires>
         <import addon="xbmc.python" version="3.0.0"/>
     </requires>
