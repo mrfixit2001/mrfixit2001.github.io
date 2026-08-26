@@ -172,7 +172,7 @@
 
 
     <!--- Premium Player -->
-    <addon id="plugin.video.premiumplayer" name="Premium Player" version="0.2.15" provider-name="mrfixit2001">
+    <addon id="plugin.video.premiumplayer" name="Premium Player" version="0.2.28" provider-name="mrfixit2001">
     <requires>
         <import addon="xbmc.python" version="3.0.0" />
         <import addon="script.module.resolveurl" version="5.1.206" />

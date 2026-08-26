@@ -20,8 +20,11 @@ Premium Player provides a user interface and integration layer between Kodi and 
 - Provide `Play All Seasons` and `Play All Starting Here` continuous TV playback.
 - Display up to 300 current movie releases and newly aired TV episodes from
   broadcast and web/streaming schedules, newest-first and paginated as three
-  pages of up to 100 results. Kodi's Back action returns to the prior page, so
-  the result list includes only forward page navigation.
+  pages of up to 100 results. TV New Releases maintains one rolling 30-day
+  All-Genres provider pool and filters genre views locally; it does not perform
+  separate provider crawls for Action, Drama, Thriller, or other genres. Kodi's
+  Back action returns to the prior page, so the result list includes only
+  forward page navigation.
 - Show coordinated, category-specific navigation artwork while leaving media results, files, and torrents visually uncluttered.
 
 Navigation directories are completed without assigning a media content type,
@@ -80,6 +83,8 @@ When source playback or a local download temporarily adds a torrent to TorBox, P
 ## Cache behavior
 
 Premium Player avoids persistent source-result and metadata caching where practical. Search history and user-created pins are intentionally retained. Temporary source lists are retained only to support navigation and playback behavior and are replaced when a new search begins.
+
+New Releases uses temporary Kodi cache storage for navigation performance. Derived Movie/TV genre result sets are cleared at the shared `New Releases` menu boundary. TV schedule acquisition is cached separately as a rolling 30-day All-Genres provider pool: genre selections filter that pool locally, today's schedule is refreshed frequently, and older daily schedule responses are reused for progressively longer intervals because historical premiere schedules are largely stable. This prevents every genre selection or daily refresh from repeating the full 30-day TVmaze crawl.
 
 Kodi itself may independently cache artwork, textures, metadata, or other resources as part of normal Kodi operation.
 

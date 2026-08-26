@@ -24,10 +24,11 @@ from .resolveurl_bridge import ResolveURLBridge
 from .sources import TorrentSourceClient
 from .theme import color_text, media_text, media_tag, provider_color, provider_text, STATUS_COLORS
 from .utils import (ADDON, ADDON_NAME, clean_path, human_size, is_archive, is_video,
-                    clear_active_source_session, load_active_source_state, load_download_history, load_pins,
-                    load_search_history, load_session, log, plugin_url, remember_search, remove_download_history,
-                    remove_pin, remove_search_history, save_pin, save_pins, save_session, set_active_source_focus,
-                    set_active_source_session, setting_bool)
+                    clear_active_source_session, clear_new_releases_cache, ensure_new_releases_cache_schema, load_active_source_state,
+                    load_download_history, load_new_releases_cache, load_pins, load_search_history,
+                    load_session, log, plugin_url, remember_search, remove_download_history, remove_pin,
+                    mark_new_releases_menu_rendered, prepare_new_releases_child_entry, remove_search_history, save_new_releases_cache, save_pin, save_pins, save_session,
+                    set_active_source_focus, set_active_source_session, setting_bool)
 
 BASE = sys.argv[0] if len(sys.argv) > 0 else 'plugin://plugin.video.premiumplayer/'
 HANDLE = int(sys.argv[1]) if len(sys.argv) > 1 and str(sys.argv[1]).lstrip('-').isdigit() else -1
@@ -245,10 +246,12 @@ def _require_search_provider(show_dialog=True):
 
 
 def root():
+    # New Releases caches intentionally survive at the Premium Player main menu.
+    # Their lifecycle boundary is one level deeper: the shared New Releases menu.
     rd, tb, rd_active, tb_active, bridge, rurl = _active_providers()
     if rurl:
         add_item('Search', 'search_root', True, menu_icon='search')
-        add_item('New Releases', 'new_releases_root', True, menu_icon='new_releases')
+        add_item('New Releases', 'new_releases_root', True, menu_icon='new_releases', main_entry='1')
     else:
         add_item('Search unavailable - authorize a provider', 'open_resolveurl_settings', False,
                  playable=False, menu_icon='search')
@@ -694,12 +697,7 @@ def remove_search(media_type, query):
         pass
 
 
-def _show_search_results(media_type, query):
-    try:
-        results = MetadataClient().search(media_type, query)
-    except Exception as exc:
-        xbmcgui.Dialog().ok(ADDON_NAME, 'Metadata search failed:\n%s' % exc)
-        return
+def _render_search_results(media_type, results):
     for meta in results:
         imdb = meta.get('imdb_id') or meta.get('id')
         if not imdb or not str(imdb).startswith('tt'):
@@ -735,6 +733,201 @@ def _show_search_results(media_type, query):
             add_item(label, 'seasons', True, art=art, info=info, context=ctx, imdb_id=imdb, title=title)
     # Search result directories are always live; never let Kodi persist them.
     end('movies' if media_type == 'movie' else 'tvshows')
+
+
+def _show_search_results(media_type, query):
+    try:
+        results = MetadataClient().search(media_type, query)
+    except Exception as exc:
+        xbmcgui.Dialog().ok(ADDON_NAME, 'Metadata search failed:\n%s' % exc)
+        return
+    _render_search_results(media_type, results)
+
+
+def _clean_episode_search_part(value):
+    """Return only letters/numbers separated by single spaces for episode search."""
+    value = str(value or '').strip().replace("'", '').replace('’', '')
+    cleaned = ''.join(ch if ch.isalnum() else ' ' for ch in value)
+    return ' '.join(cleaned.split())
+
+
+def _episode_search_queries(title, season, episode, episode_title):
+    """Build the two exact, label-independent queries used by New TV Episodes."""
+    show = _clean_episode_search_part(title)
+    episode_name = _clean_episode_search_part(episode_title)
+    try:
+        code = 'S%02dE%02d' % (int(season), int(episode))
+    except (TypeError, ValueError):
+        return []
+
+    queries = []
+    for query in ('%s %s' % (show, code), '%s %s' % (show, episode_name)):
+        query = ' '.join(query.split()).strip()
+        if query and query.casefold() not in {q.casefold() for q in queries}:
+            queries.append(query)
+    return queries
+
+
+def episode_search_results(title, season, episode, episode_title=''):
+    """Search a New Releases TV episode two ways and merge the visible results.
+
+    Never derive either query from the decorated Kodi ListItem label.  That label
+    can contain media tags, punctuation and an air date; the search contract is
+    intentionally limited to ``Show Name SXXEXX`` and ``Show Name Episode Name``.
+    """
+    clear_active_source_session()
+    state = _require_search_provider(show_dialog=True)
+    if not (state[2] or state[3] or state[5]):
+        return
+
+    queries = _episode_search_queries(title, season, episode, episode_title)
+    if not queries:
+        xbmcgui.Dialog().ok(ADDON_NAME, 'Could not build a valid TV episode search.')
+        return
+
+    client = MetadataClient()
+    merged = []
+    seen = set()
+    errors = []
+    for query in queries:
+        try:
+            rows = client.search('series', query)
+        except Exception as exc:
+            errors.append('%s: %s' % (query, exc))
+            log('TV episode metadata search failed for %r: %s' % (query, exc), xbmc.LOGWARNING)
+            continue
+        for meta in rows or []:
+            imdb = str(meta.get('imdb_id') or meta.get('id') or '').strip()
+            key = imdb.casefold() if imdb else (
+                _clean_episode_search_part(meta.get('name') or meta.get('title')).casefold(),
+                str(meta.get('releaseInfo') or meta.get('year') or '')[:4],
+            )
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(meta)
+
+    if not merged and errors:
+        xbmcgui.Dialog().ok(ADDON_NAME, 'TV episode search failed:\n%s' % '\n'.join(errors))
+        return
+    _render_search_results('series', merged)
+
+
+def _new_release_tv_target(imdb_id, title, season, episode, episode_title=''):
+    """Open the deepest New Releases TV location that actually exists.
+
+    New TV Releases is sourced independently from the series metadata used by
+    the normal TV browser.  Very recent schedule entries can therefore refer to
+    a season/episode that has not propagated into that browser yet.  Resolve the
+    target progressively so Kodi never opens an empty directory:
+
+      * show + season + episode -> open the season and focus that episode
+      * show + season           -> open the season's episode list
+      * show only               -> open the show's season list
+
+    This is a direct IMDb metadata lookup, not a title search; selecting a New
+    Releases row never starts a source search or presents metadata search
+    results.
+    """
+    try:
+        wanted_season = int(season)
+        wanted_episode = int(episode)
+    except (TypeError, ValueError):
+        xbmcgui.Dialog().ok(ADDON_NAME, 'This new-release entry does not contain a valid season and episode.')
+        _close_addon()
+        return
+
+    try:
+        meta = MetadataClient().meta('series', imdb_id)
+    except Exception as exc:
+        xbmcgui.Dialog().ok(ADDON_NAME, 'Could not load series metadata:\n%s' % exc)
+        _close_addon()
+        return
+
+    if not isinstance(meta, dict) or not meta:
+        xbmcgui.Dialog().ok(ADDON_NAME, 'This TV show is not currently available in the TV browser.')
+        _close_addon()
+        return
+
+    resolved_title = meta.get('name') or meta.get('title') or title or 'TV Show'
+    videos = list(meta.get('videos') or [])
+    seasons_available = set()
+    episodes_by_season = {}
+    for video in videos:
+        try:
+            video_season = int(video.get('season'))
+            video_episode = int(video.get('episode'))
+        except (TypeError, ValueError):
+            continue
+        seasons_available.add(video_season)
+        episodes_by_season.setdefault(video_season, set()).add(video_episode)
+
+    if wanted_season in seasons_available:
+        if wanted_episode in episodes_by_season.get(wanted_season, set()):
+            log('New Releases TV matched show/season/episode: %s S%02dE%02d' %
+                (resolved_title, wanted_season, wanted_episode))
+            episodes(imdb_id, resolved_title, wanted_season, focus_episode=wanted_episode)
+        else:
+            log('New Releases TV matched show/season only: %s S%02d; episode E%02d unavailable' %
+                (resolved_title, wanted_season, wanted_episode))
+            episodes(imdb_id, resolved_title, wanted_season)
+        return
+
+    if seasons_available:
+        log('New Releases TV matched show only: %s; season S%02d unavailable' %
+            (resolved_title, wanted_season))
+        seasons(imdb_id, resolved_title)
+        return
+
+    log('New Releases TV matched show but no seasons exist: %s; using plain-text torrent fallback' % resolved_title)
+    _new_release_episode_text_sources(
+        imdb_id, resolved_title, wanted_season, wanted_episode, episode_title)
+
+
+def _new_release_episode_text_sources(imdb_id, title, season, episode, episode_title=''):
+    """Fallback source discovery for a release absent from series metadata.
+
+    No metadata search is performed and these queries are never written to the
+    add-on's recent-search history.  Search the torrent index directly using the
+    two sanitized forms requested for New Releases, merge/dedupe the raw hits,
+    then reuse the normal quality/size/debrid source pipeline.
+    """
+    clear_active_source_session()
+    queries = _episode_search_queries(title, season, episode, episode_title)
+    if not queries:
+        xbmcgui.Dialog().ok(ADDON_NAME, 'Could not build a valid TV episode torrent search.')
+        return
+
+    state = _require_search_provider(show_dialog=True)
+    if not (state[2] or state[3] or state[5]):
+        return
+
+    media = {
+        'type': 'series',
+        'imdb_id': imdb_id,
+        'title': title,
+        'season': int(season),
+        'episode': int(episode),
+        'episode_title': episode_title or '',
+        'label': '%s - S%02dE%02d%s' % (
+            title, int(season), int(episode),
+            (' - ' + episode_title) if episode_title else ''),
+    }
+    session_id = _discover_source_session(
+        media, show_dialog=True, provider_state=state,
+        text_queries=queries, progress_title='Fallback Torrent Search')
+    if not session_id:
+        return
+
+    # This fallback is reached from a New Releases item declared as a folder.
+    # Kodi therefore expects this *same plugin invocation* to populate and finish
+    # the child directory.  Calling Container.Update() here races/abandons the
+    # pending folder request and Kodi restores the New TV Releases parent list.
+    # Render the saved source session directly instead. Back then naturally
+    # returns to New TV Releases, while playback continues to use the exact same
+    # temporary session/cache as the normal source-results route.
+    set_active_source_session(session_id)
+    _render_source_session(session_id)
 
 
 def seasons(imdb_id, title):
@@ -1017,7 +1210,7 @@ def _expand_provider_rows(source_list, rd, tb, rd_active, tb_active, bridge, rur
     return rows
 
 def _discover_source_session(media, show_dialog=True, provider_state=None, rd_cloud_override=None,
-                             progress_title=None):
+                             progress_title=None, text_queries=None):
     """Discover, filter and expand sources with a visible, cancellable progress UI.
 
     provider_state/rd_cloud_override let Play All reuse invariant account state
@@ -1046,7 +1239,11 @@ def _discover_source_session(media, show_dialog=True, provider_state=None, rd_cl
 
         update(18, 'Searching torrent sources...')
         try:
-            source_list = TorrentSourceClient().get(media)
+            source_client = TorrentSourceClient()
+            if text_queries:
+                source_list = source_client.search_text(text_queries)
+            else:
+                source_list = source_client.get(media)
         except Exception as exc:
             if show_dialog:
                 try:
@@ -1060,6 +1257,18 @@ def _discover_source_session(media, show_dialog=True, provider_state=None, rd_cl
         if progress.iscanceled():
             return None
 
+        # Distinguish an upstream search that returned no streams at all from
+        # one that returned streams which were subsequently excluded by the
+        # user's configured quality/size filters.
+        if not source_list:
+            if show_dialog:
+                try:
+                    progress.close()
+                except Exception:
+                    pass
+                xbmcgui.Dialog().ok(ADDON_NAME, 'No streams for this selection are currently available')
+            return None
+
         update(48, 'Applying quality and size filters...')
         source_list = [row for row in source_list if _source_allowed(row)]
         if not source_list:
@@ -1068,7 +1277,7 @@ def _discover_source_session(media, show_dialog=True, provider_state=None, rd_cl
                     progress.close()
                 except Exception:
                     pass
-                xbmcgui.Dialog().ok(ADDON_NAME, 'No torrents passed the quality/size filters.')
+                xbmcgui.Dialog().ok(ADDON_NAME, 'No available streams were within the quality/size filters')
             return None
 
         update(56, 'Checking enabled debrid services...')
@@ -1367,16 +1576,68 @@ def download_source(session, index):
 
 
 
-def new_releases_root():
+def new_releases_root(main_entry=False):
+    # This shared menu is the New Releases cache boundary.  Clear every Movie
+    # and TV genre result set whenever this route is actually rendered.  Kodi
+    # can restore this directory from navigation history without reinvoking the
+    # plugin; child genre routes detect when this menu is their currently visible
+    # parent and perform the same invalidation before descending again.
+    clear_new_releases_cache()
+    mark_new_releases_menu_rendered()
     state = _require_search_provider(show_dialog=True)
     if not (state[2] or state[3] or state[5]):
         return
-    add_item(media_text('movie', 'New Movie Releases'), 'new_releases', True,
+    add_item(media_text('movie', 'New Movie Releases'), 'new_release_genres', True,
              menu_icon='movie_new', media_type='movie')
-    add_item(media_text('series', 'New TV Episodes'), 'new_releases', True,
+    add_item(media_text('series', 'New TV Episodes'), 'new_release_genres', True,
              menu_icon='tv_new', media_type='series')
     end_menu()
 
+
+def _visible_container_action():
+    try:
+        current = str(xbmc.getInfoLabel('Container.FolderPath') or '')
+        query = parse.urlsplit(current).query
+        values = parse.parse_qs(query).get('action') or []
+        return str(values[-1] if values else '')
+    except Exception:
+        return ''
+
+
+def new_release_genres(media_type):
+    # If Kodi restored the shared New Releases parent from in-memory history,
+    # its Python route did not run on Back.  Detect that exact visible parent
+    # before descending and clear here.  Re-rendering this genre menu itself
+    # does not clear anything, so cached pages remain fast below the boundary.
+    prepare_new_releases_child_entry()
+
+    client = MetadataClient()
+    page_icon = 'movie_new' if media_type == 'movie' else 'tv_new'
+    add_item('All Genres', 'new_releases', True, menu_icon=page_icon,
+             media_type=media_type)
+    try:
+        # Genre-menu construction must be immediate. Do not crawl the TVmaze
+        # 30-day schedule here; that work belongs only to the selected genre.
+        # TVmaze publishes a fixed genre vocabulary, so series categories are
+        # available locally with no network request. Movies retain Cinemeta's
+        # manifest-driven taxonomy.
+        if media_type == 'series':
+            genres = client.tv_genres() + ['Other']
+        else:
+            genres = client.genres(media_type)
+    except Exception as exc:
+        log('Could not load New Releases genres: %s' % exc, xbmc.LOGWARNING)
+        genres = []
+    seen = set()
+    for genre in genres:
+        genre = str(genre or '').strip()
+        key = genre.casefold()
+        if not genre or key in seen:
+            continue
+        seen.add(key)
+        add_item(genre, 'new_releases', True, menu_icon=page_icon,
+                 media_type=media_type, genre=genre)
+    end_menu()
 
 def _release_date_key(meta):
     """Return a sortable (year, month, day) tuple, newest first when reversed."""
@@ -1397,37 +1658,70 @@ def _release_date_key(meta):
     return 0, 0, 0
 
 
-def new_releases(media_type, page=1):
+def new_releases(media_type, page=1, genre=None):
     client = MetadataClient()
+    genre = str(genre or '').strip()
     try:
         page = max(1, min(3, int(page or 1)))
     except (TypeError, ValueError):
         page = 1
-    try:
-        if media_type == 'series':
-            # TV New Releases is an episode feed only. Never pad it with a
-            # series catalog: doing so surfaces old shows by their original
-            # premiere year instead of actual newly aired episodes.
-            rows = client.new_tv_releases(days=30, limit=NEW_RELEASES_MAX_RESULTS)
-        else:
-            rows = client.new_releases(
-                media_type, limit=NEW_RELEASES_MAX_RESULTS, enrich=False)
-    except Exception as exc:
-        xbmcgui.Dialog().ok(ADDON_NAME, 'Could not load new releases:\n%s' % exc)
-        return
 
-    rows = [meta for meta in list(rows or [])
-            if str(meta.get('name') or meta.get('title') or '').strip()]
-    rows = rows[:NEW_RELEASES_MAX_RESULTS]
-    # Python's sort is stable, so equal/unknown dates retain the catalog's
-    # original ordering while every known date is strictly newest-first.
-    rows.sort(key=_release_date_key, reverse=True)
+    # Cache the complete finalized result set independently for each genre.
+    # Pages 2/3 are therefore local-only; every Movie/TV genre cache survives
+    # until the user returns to the shared New Releases menu.
+    rows = load_new_releases_cache(media_type, genre)
+    if rows is None:
+        try:
+            if media_type == 'series':
+                # TV acquisition is genre-agnostic: maintain one rolling raw
+                # 30-day All Genres TVmaze pool, then filter the selected genre
+                # locally. The 300-row cap applies only after local filtering;
+                # there is no 300-results-per-genre provider crawl.
+                rows = client.new_tv_releases(
+                    days=30, limit=NEW_RELEASES_MAX_RESULTS, genre=genre or None)
+            elif genre:
+                # Cinemeta's genre catalog is popularity-ranked. Walk its
+                # year-sorted New catalog instead so these are genuinely the
+                # newest releases for the selected genre.
+                rows = client.new_releases_by_genre(
+                    media_type, genre, limit=NEW_RELEASES_MAX_RESULTS)
+            else:
+                # All Genres deliberately retains the pre-genre behavior.
+                rows = client.new_releases(
+                    media_type, limit=NEW_RELEASES_MAX_RESULTS, enrich=False)
+        except Exception as exc:
+            xbmcgui.Dialog().ok(ADDON_NAME, 'Could not load new releases:\n%s' % exc)
+            return
+
+        rows = [meta for meta in list(rows or [])
+                if str(meta.get('name') or meta.get('title') or '').strip()]
+        rows = rows[:NEW_RELEASES_MAX_RESULTS]
+
+        # Finalize all three Movie pages up front. Previously each 100-row page
+        # performed its own metadata enrichment, which made first navigation to
+        # pages 2/3 slow even though the 300-row catalog had already been read.
+        if media_type != 'series' and rows and not genre:
+            rows = client.enrich_rows(media_type, rows)
+
+        # Python's sort is stable, so equal/unknown dates retain the catalog's
+        # original ordering while every known date is strictly newest-first.
+        rows.sort(key=_release_date_key, reverse=True)
+        save_new_releases_cache(media_type, rows, genre)
+        log('Cached %d %s New Releases rows for genre=%s' %
+            (len(rows), media_type, genre or 'All Genres'))
+    else:
+        # Defensive normalization protects rendering if a cache file was
+        # partially written or created by an older build.
+        rows = [meta for meta in list(rows or []) if isinstance(meta, dict)
+                and str(meta.get('name') or meta.get('title') or '').strip()]
+        rows = rows[:NEW_RELEASES_MAX_RESULTS]
+        log('Using cached %d %s New Releases rows for genre=%s' %
+            (len(rows), media_type, genre or 'All Genres'))
+
     page_count = max(1, min(3, (len(rows) + NEW_RELEASES_PAGE_SIZE - 1) // NEW_RELEASES_PAGE_SIZE))
     page = min(page, page_count)
     start = (page - 1) * NEW_RELEASES_PAGE_SIZE
-    page_rows = rows[start:start + NEW_RELEASES_PAGE_SIZE]
-    visible_rows = (page_rows if media_type == 'series'
-                    else client.enrich_rows(media_type, page_rows))
+    visible_rows = rows[start:start + NEW_RELEASES_PAGE_SIZE]
     page_icon = 'movie_new' if media_type == 'movie' else 'tv_new'
 
     for meta in visible_rows:
@@ -1465,9 +1759,13 @@ def new_releases(media_type, page=1):
             ctx = _pin_context('pin_meta', kind='episode', imdb_id=imdb, title=title,
                                season=season, episode=episode,
                                episode_title=episode_title)
-            add_item(label, 'sources', False, art=art, info=info, context=ctx,
-                     playable=False, media_type='series', imdb_id=imdb, title=title,
-                     season=season, episode=episode, episode_title=episode_title)
+            # Resolve the deepest location that exists in the normal TV
+            # browser. Very recent schedule data can arrive before Cinemeta has
+            # the corresponding episode (or even season), so never jump blindly
+            # into an empty episode directory.
+            add_item(label, 'new_release_tv_target', True, art=art, info=info, context=ctx,
+                     playable=False, imdb_id=imdb, title=title, season=season,
+                     episode=episode, episode_title=episode_title)
         else:
             if str(year)[:4].isdigit():
                 info['year'] = int(str(year)[:4])
@@ -1479,7 +1777,8 @@ def new_releases(media_type, page=1):
 
     if page < page_count:
         add_item('Next Page (%d/%d)' % (page + 1, page_count), 'new_releases', True,
-                 menu_icon=page_icon, media_type=media_type, page=page + 1)
+                 menu_icon=page_icon, media_type=media_type, page=page + 1,
+                 genre=genre or None)
     end('movies' if media_type == 'movie' else 'episodes')
 
 
@@ -2169,6 +2468,9 @@ def _set_failed(message):
 
 
 def run():
+    # Cache migrations are performed before routing so an addon upgrade actively
+    # deletes every stale New Releases result file before any route can read it.
+    ensure_new_releases_cache_schema()
     p = params()
     action = p.get('action', 'root')
     if not ensure_terms_agreed():
@@ -2206,13 +2508,21 @@ def run():
         elif action == 'search_root':
             search_root()
         elif action == 'new_releases_root':
-            new_releases_root()
+            new_releases_root(p.get('main_entry') == '1')
+        elif action == 'new_release_genres':
+            new_release_genres(p.get('media_type', 'movie'))
         elif action == 'new_releases':
-            new_releases(p.get('media_type', 'movie'), p.get('page', '1'))
+            new_releases(p.get('media_type', 'movie'), p.get('page', '1'), p.get('genre', ''))
+        elif action == 'new_release_tv_target':
+            _new_release_tv_target(p.get('imdb_id', ''), p.get('title', 'TV Show'),
+                                   p.get('season'), p.get('episode'), p.get('episode_title', ''))
         elif action == 'search_prompt':
             search_prompt(p.get('media_type', 'movie'))
         elif action == 'search_results':
             search_results(p.get('media_type', 'movie'), p.get('query', ''))
+        elif action == 'episode_search_results':
+            episode_search_results(p.get('title', ''), p.get('season'), p.get('episode'),
+                                   p.get('episode_title', ''))
         elif action == 'remove_search':
             remove_search(p.get('media_type', 'movie'), p.get('query', ''))
         elif action == 'seasons':

@@ -16,6 +16,9 @@ ADDON_NAME = ADDON.getAddonInfo('name')
 VERSION = ADDON.getAddonInfo('version')
 PROFILE = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 TEMP_ROOT = xbmcvfs.translatePath('special://temp/premiumplayer')
+NEW_RELEASES_CACHE_SCHEMA = 5
+NEW_RELEASES_NAV_STATE = os.path.join(TEMP_ROOT, 'new_releases_nav_state.json')
+NEW_RELEASES_SCHEMA_MARKER = os.path.join(TEMP_ROOT, 'new_releases_cache_schema.json')
 VIDEO_EXTS = ('.mkv', '.mp4', '.avi', '.mov', '.m4v', '.ts', '.m2ts', '.webm', '.mpg', '.mpeg', '.wmv')
 ARCHIVE_EXTS = ('.zip', '.rar', '.tar', '.7z')
 
@@ -81,6 +84,7 @@ def save_session(data):
 def load_session(sid):
     path = os.path.join(ensure_session_dir(), sid + '.json')
     if not xbmcvfs.exists(path):
+        log('New Releases cache MISS: %s' % os.path.basename(path))
         return None
     f = xbmcvfs.File(path, 'r')
     try:
@@ -97,6 +101,222 @@ def delete_session(sid):
             xbmcvfs.delete(path)
     except Exception:
         pass
+
+
+
+def _delete_new_releases_temp_files(include_nav_state=False, include_schema_marker=False):
+    """Delete New Releases temp files from every cache schema used by the addon.
+
+    Historical builds used unversioned names such as ``new_releases_movie.json``
+    and ``new_releases_series_action.json``; newer builds use versioned names.
+    Enumerating by prefix makes cleanup an active deletion, not merely a cache-key
+    change that leaves stale files behind.
+    """
+    if not xbmcvfs.exists(TEMP_ROOT):
+        return 0
+    try:
+        _dirs, files = xbmcvfs.listdir(TEMP_ROOT)
+    except Exception as exc:
+        log('Could not enumerate New Releases temp files: %s' % exc, xbmc.LOGWARNING)
+        return 0
+
+    nav_name = os.path.basename(NEW_RELEASES_NAV_STATE)
+    marker_name = os.path.basename(NEW_RELEASES_SCHEMA_MARKER)
+    removed = 0
+    for name in files:
+        text = str(name)
+        if not text.startswith('new_releases_') or not text.endswith('.json'):
+            continue
+        if text == nav_name and not include_nav_state:
+            continue
+        if text == marker_name and not include_schema_marker:
+            continue
+        path = os.path.join(TEMP_ROOT, text)
+        try:
+            if xbmcvfs.exists(path):
+                deleted = xbmcvfs.delete(path)
+                if deleted is not False and not xbmcvfs.exists(path):
+                    removed += 1
+                elif not xbmcvfs.exists(path):
+                    removed += 1
+                else:
+                    log('New Releases temp file still exists after delete attempt: %s' % text,
+                        xbmc.LOGWARNING)
+        except Exception as exc:
+            log('Could not delete New Releases temp file %s: %s' % (text, exc), xbmc.LOGWARNING)
+    return removed
+
+
+def ensure_new_releases_cache_schema():
+    """Actively purge old New Releases caches once when the cache schema changes.
+
+    This deliberately deletes the old files themselves. Merely changing the
+    filename/schema is insufficient because Kodi upgrades preserve special://temp
+    across addon invocations and stale files can otherwise linger indefinitely.
+    The stale navigation state is purged at the same time so the first navigation
+    after an upgrade starts from a known boundary state.
+    """
+    if not xbmcvfs.exists(TEMP_ROOT):
+        xbmcvfs.mkdirs(TEMP_ROOT)
+
+    current_schema = None
+    if xbmcvfs.exists(NEW_RELEASES_SCHEMA_MARKER):
+        try:
+            f = xbmcvfs.File(NEW_RELEASES_SCHEMA_MARKER, 'r')
+            try:
+                raw = f.read()
+            finally:
+                f.close()
+            data = json.loads(raw) if raw else {}
+            if isinstance(data, dict):
+                current_schema = data.get('schema')
+        except Exception:
+            current_schema = None
+
+    if current_schema == NEW_RELEASES_CACHE_SCHEMA:
+        return False
+
+    removed = _delete_new_releases_temp_files(
+        include_nav_state=True, include_schema_marker=True)
+    log('New Releases cache schema migration %s -> %s; actively removed %d old temp file(s)' %
+        (current_schema if current_schema is not None else 'legacy',
+         NEW_RELEASES_CACHE_SCHEMA, removed))
+
+    try:
+        f = xbmcvfs.File(NEW_RELEASES_SCHEMA_MARKER, 'w')
+        try:
+            f.write(json.dumps({
+                'schema': NEW_RELEASES_CACHE_SCHEMA,
+                'addon_version': VERSION,
+                'updated': int(time.time()),
+            }))
+        finally:
+            f.close()
+    except Exception as exc:
+        # If the marker cannot be written, fail safe: the next invocation will
+        # attempt the purge again rather than trusting potentially stale data.
+        log('Could not write New Releases cache schema marker: %s' % exc, xbmc.LOGWARNING)
+    return True
+
+def _new_releases_cache_path(media_type, genre=None):
+    if not xbmcvfs.exists(TEMP_ROOT):
+        xbmcvfs.mkdirs(TEMP_ROOT)
+    kind = 'series' if str(media_type or '') == 'series' else 'movie'
+    genre_text = str(genre or '').strip()
+    if not genre_text:
+        genre_key = 'all'
+    else:
+        genre_key = re.sub(r'[^a-z0-9]+', '_', genre_text.casefold()).strip('_') or 'all'
+    return os.path.join(TEMP_ROOT, 'new_releases_v%d_%s_%s.json' % (NEW_RELEASES_CACHE_SCHEMA, kind, genre_key))
+
+
+def load_new_releases_cache(media_type, genre=None):
+    """Load one temporary, genre-specific New Releases result set.
+
+    Each Movie/TV genre keeps its complete three-page result set under
+    special://temp so Kodi page navigation is local and immediate.  The shared
+    New Releases menu is the lifecycle boundary that clears these files.
+    """
+    path = _new_releases_cache_path(media_type, genre)
+    if not xbmcvfs.exists(path):
+        return None
+    try:
+        f = xbmcvfs.File(path, 'r')
+        try:
+            raw = f.read()
+        finally:
+            f.close()
+        rows = json.loads(raw) if raw else None
+        if isinstance(rows, list):
+            log('New Releases cache HIT: %s (%d rows)' % (os.path.basename(path), len(rows)))
+            return rows
+        return None
+    except Exception as exc:
+        log('Could not load New Releases cache: %s' % exc, xbmc.LOGWARNING)
+        return None
+
+
+def save_new_releases_cache(media_type, rows, genre=None):
+    """Persist one complete (up to 300-row) genre-specific result set."""
+    path = _new_releases_cache_path(media_type, genre)
+    try:
+        f = xbmcvfs.File(path, 'w')
+        try:
+            f.write(json.dumps(list(rows or []), ensure_ascii=False))
+        finally:
+            f.close()
+        return True
+    except Exception as exc:
+        log('Could not save New Releases cache: %s' % exc, xbmc.LOGWARNING)
+        return False
+
+
+def clear_new_releases_cache():
+    """Actively delete every Movie/TV New Releases result cache, old or current."""
+    removed = _delete_new_releases_temp_files(
+        include_nav_state=False, include_schema_marker=False)
+    log('Cleared %d New Releases result cache file(s)' % removed)
+    return removed
+
+def _load_new_releases_nav_state():
+    if not xbmcvfs.exists(NEW_RELEASES_NAV_STATE):
+        return {}
+    try:
+        f = xbmcvfs.File(NEW_RELEASES_NAV_STATE, 'r')
+        try:
+            raw = f.read()
+        finally:
+            f.close()
+        data = json.loads(raw) if raw else {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_new_releases_nav_state(descended):
+    if not xbmcvfs.exists(TEMP_ROOT):
+        xbmcvfs.mkdirs(TEMP_ROOT)
+    data = {
+        'schema': NEW_RELEASES_CACHE_SCHEMA,
+        'descended': bool(descended),
+        'updated': int(time.time()),
+    }
+    f = xbmcvfs.File(NEW_RELEASES_NAV_STATE, 'w')
+    try:
+        f.write(json.dumps(data))
+    finally:
+        f.close()
+
+
+def mark_new_releases_menu_rendered():
+    """Record a freshly rendered shared New Releases menu.
+
+    The menu route itself clears all result caches. ``descended=False`` means
+    the first Movie/TV child opened from this freshly rendered menu must not
+    clear a second time.
+    """
+    _save_new_releases_nav_state(False)
+
+
+def prepare_new_releases_child_entry():
+    """Honor the shared New Releases menu boundary despite Kodi history.
+
+    Kodi can restore a parent directory from its in-memory navigation history
+    without reinvoking that parent's plugin URL. We therefore remember whether
+    a Movie/TV child has already been entered from the current shared menu. If a
+    top-level child is entered again, the user necessarily returned through the
+    New Releases boundary, so all result caches are invalidated before descent.
+
+    A missing/old state also invalidates caches, which prevents caches written
+    by older addon builds from surviving an upgrade.
+    """
+    state = _load_new_releases_nav_state()
+    schema_ok = state.get('schema') == NEW_RELEASES_CACHE_SCHEMA
+    descended = bool(state.get('descended')) if schema_ok else True
+    if descended:
+        clear_new_releases_cache()
+        log('New Releases boundary detected; result caches invalidated')
+    _save_new_releases_nav_state(True)
 
 
 def _active_source_path():
