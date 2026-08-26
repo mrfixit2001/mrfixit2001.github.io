@@ -62,17 +62,9 @@ class MetadataClient:
                     rows[idx] = merged
         return rows
 
-    def new_releases(self, media_type, year=None, limit=40):
-        """Return Cinemeta's official New/year catalog without local caching."""
-        kind = 'movie' if media_type == 'movie' else 'series'
-        year = int(year or datetime.now().year)
-        url = '%s/catalog/%s/year/genre=%d.json' % (self.base, kind, year)
-        payload, _, _ = request_json(url, headers=self.headers)
-        rows = (payload or {}).get('metas', []) if isinstance(payload, dict) else []
-        rows = list(rows or [])[:max(1, int(limit))]
-
-        # As with search, catalog rows may be sparse. Enrich visible entries live
-        # from Cinemeta's meta endpoint, but never persist the result ourselves.
+    def enrich_rows(self, media_type, rows):
+        """Enrich only the rows that will be rendered on the current page."""
+        rows = [dict(row) for row in list(rows or [])]
         missing = []
         for idx, row in enumerate(rows):
             imdb = row.get('imdb_id') or row.get('id')
@@ -95,53 +87,135 @@ class MetadataClient:
                     rows[idx] = merged
         return rows
 
-    def new_tv_releases(self, days=7, limit=40):
-        """Return recently airing TV shows from TVmaze, live-only.
+    def new_releases(self, media_type, year=None, limit=80, enrich=True):
+        """Return an expanded, paginated Cinemeta year catalog live.
 
-        De-duplicate by show ID and keep the most recent airing first. The row
-        shape mirrors Cinemeta enough for Premium Player's list renderer.
+        Cinemeta catalog responses are paginated through Stremio's ``skip``
+        catalog extra. Continue requesting pages until the requested visible
+        limit is reached, de-duplicating rows and falling back to the prior year
+        only when the current-year catalog is genuinely short.
+        """
+        kind = 'movie' if media_type == 'movie' else 'series'
+        year = int(year or datetime.now().year)
+        limit = max(1, int(limit))
+        rows = []
+        seen = set()
+        for catalog_year in (year, year - 1):
+            skip = 0
+            while len(rows) < limit:
+                extra = 'genre=%d' % catalog_year
+                if skip:
+                    extra += '&skip=%d' % skip
+                url = '%s/catalog/%s/year/%s.json' % (self.base, kind, extra)
+                payload, _, _ = request_json(url, headers=self.headers)
+                page = (payload or {}).get('metas', []) if isinstance(payload, dict) else []
+                page = list(page or [])
+                if not page:
+                    break
+                added = 0
+                for row in page:
+                    key = str(row.get('imdb_id') or row.get('id') or '').strip().casefold()
+                    if not key:
+                        key = '%s|%s' % (
+                            str(row.get('name') or row.get('title') or '').strip().casefold(),
+                            str(row.get('releaseInfo') or row.get('year') or '').strip())
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    rows.append(row)
+                    added += 1
+                    if len(rows) >= limit:
+                        break
+                if len(rows) >= limit or added == 0:
+                    break
+                skip += len(page)
+            if len(rows) >= limit:
+                break
+        rows = rows[:limit]
+
+        # Pagination callers collect up to 300 lightweight catalog rows, then
+        # enrich only the 100 rows visible on the requested page.
+        return self.enrich_rows(media_type, rows) if enrich else rows
+
+    def new_tv_releases(self, days=30, limit=80):
+        """Return newly aired TV *episodes* from TVmaze, newest first.
+
+        Every schedule entry remains a separate episode.  This intentionally
+        does not de-duplicate by show: two newly released episodes of the same
+        series are two distinct New Releases results.  Only entries with an
+        IMDb series ID and a concrete season/episode number are returned so
+        every displayed row can open that exact episode in Premium Player.
         """
         today = datetime.now().date()
         collected = {}
+        limit = max(1, int(limit))
         for offset in range(max(1, int(days))):
             day = today - timedelta(days=offset)
-            try:
-                schedule, _, _ = request_json(
-                    self.tvmaze + '/schedule',
-                    params={'country': 'US', 'date': day.isoformat()},
-                    headers=self.headers, timeout=20)
-            except Exception as exc:
-                log('TVmaze new-release schedule unavailable for %s: %s' % (day, exc))
-                continue
-            for episode in schedule if isinstance(schedule, list) else []:
+            schedule = []
+            schedule_requests = (
+                ('/schedule', {'country': 'US', 'date': day.isoformat()}),
+                ('/schedule/web', {'date': day.isoformat()}),
+            )
+            for endpoint, request_params in schedule_requests:
+                try:
+                    payload, _, _ = request_json(
+                        self.tvmaze + endpoint, params=request_params,
+                        headers=self.headers, timeout=20)
+                    if isinstance(payload, list):
+                        schedule.extend(payload)
+                except Exception as exc:
+                    log('TVmaze new-release schedule unavailable for %s%s: %s' %
+                        (day, endpoint, exc))
+            for episode in schedule:
                 show = episode.get('show') or {}
                 show_id = show.get('id')
-                title = show.get('name') or ''
-                if not show_id or not title or show_id in collected:
-                    continue
-                image = show.get('image') or {}
-                premiered = str(show.get('premiered') or '')[:4]
+                show_title = show.get('name') or ''
                 externals = show.get('externals') or {}
-                imdb = externals.get('imdb') or ''
-                collected[show_id] = {
-                    'id': imdb or ('tvmaze:%s' % show_id),
+                imdb = str(externals.get('imdb') or '').strip()
+                try:
+                    season = int(episode.get('season'))
+                    number = int(episode.get('number'))
+                except (TypeError, ValueError):
+                    continue
+                if not show_id or not show_title or not imdb.startswith('tt'):
+                    continue
+                airdate = str(episode.get('airdate') or day.isoformat())[:10]
+                episode_id = str(episode.get('id') or
+                                 '%s:%s:%s:%s' % (show_id, season, number, airdate))
+                if episode_id in collected:
+                    continue
+                show_image = show.get('image') or {}
+                episode_image = episode.get('image') or {}
+                poster = show_image.get('original') or show_image.get('medium') or ''
+                thumbnail = (episode_image.get('original') or episode_image.get('medium') or
+                             poster)
+                episode_title = episode.get('name') or 'Episode %d' % number
+                collected[episode_id] = {
+                    'id': episode_id,
                     'imdb_id': imdb,
-                    'name': title,
-                    'title': title,
-                    'year': premiered,
-                    'releaseInfo': premiered,
-                    'poster': image.get('original') or image.get('medium') or '',
-                    'background': image.get('original') or image.get('medium') or '',
-                    'description': _plain(show.get('summary')),
-                    '_airdate': str(episode.get('airdate') or day.isoformat()),
+                    'name': show_title,
+                    'title': show_title,
+                    'episode_title': episode_title,
+                    'season': season,
+                    'episode': number,
+                    'year': airdate[:4],
+                    'releaseInfo': airdate,
+                    'poster': poster,
+                    'thumbnail': thumbnail,
+                    'background': poster,
+                    'description': (_plain(episode.get('summary')) or
+                                    _plain(show.get('summary'))),
+                    '_airdate': airdate,
+                    '_airstamp': str(episode.get('airstamp') or ''),
                 }
-                if len(collected) >= int(limit):
+                if len(collected) >= limit:
                     break
-            if len(collected) >= int(limit):
+            if len(collected) >= limit:
                 break
         rows = list(collected.values())
-        rows.sort(key=lambda row: row.get('_airdate') or '', reverse=True)
-        return rows[:max(1, int(limit))]
+        rows.sort(key=lambda row: (row.get('_airdate') or '',
+                                   row.get('_airstamp') or ''), reverse=True)
+        return rows[:limit]
 
     def meta(self, media_type, imdb_id):
         kind = 'movie' if media_type == 'movie' else 'series'

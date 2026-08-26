@@ -18,9 +18,20 @@ Premium Player provides a user interface and integration layer between Kodi and 
 - Play or download files returned by configured third-party services.
 - Pin movies, shows, seasons, episodes, sources, account items, and locally downloaded files.
 - Provide `Play All Seasons` and `Play All Starting Here` continuous TV playback.
-- Display current movie releases and recent TV episodes from third-party metadata/catalog services.
+- Display up to 300 current movie releases and newly aired TV episodes from
+  broadcast and web/streaming schedules, newest-first and paginated as three
+  pages of up to 100 results. Kodi's Back action returns to the prior page, so
+  the result list includes only forward page navigation.
+- Show coordinated, category-specific navigation artwork while leaving media results, files, and torrents visually uncluttered.
+
+Navigation directories are completed without assigning a media content type,
+allowing compatible Kodi list views to draw each supplied `ListItem.Icon` in
+the actual menu row. Media-result, provider-file, and torrent listings keep
+their existing media classifications and do not receive navigation artwork.
 
 Premium Player does not itself operate a streaming service, debrid service, torrent host, torrent swarm, file locker, CDN, media server, or content repository.
+
+On first launch, Premium Player presents a detailed third-party-content, authorized-use, assumption-of-risk, limitation-of-liability, and indemnification notice and requires an explicit `AGREE` or `DISAGREE` choice. Agreement is stored together with the notice version, so a materially revised notice is shown once after an update. `Settings > Maintenance > Reset all settings to defaults` clears every Premium Player setting and causes the notice to appear again on the next launch; ResolveURL account authorizations remain managed separately.
 
 ## ResolveURL dependency
 
@@ -63,6 +74,8 @@ For continuous TV playback, each episode performs a new source search using the 
 - `Downloaded` when locally downloaded files exist
 
 Provider-backed pinned items are validated against supported provider accounts when possible. Local downloaded items are validated against the local filesystem and are automatically removed from the list when the corresponding file no longer exists.
+
+When source playback or a local download temporarily adds a torrent to TorBox, Premium Player removes that newly-created item after playback, cancellation, or transfer failure. A torrent that was already present in the user's TorBox account is never enrolled in this automatic cleanup lifecycle.
 
 ## Cache behavior
 

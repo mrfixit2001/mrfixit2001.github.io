@@ -31,6 +31,46 @@ from .utils import (ADDON, ADDON_NAME, clean_path, human_size, is_archive, is_vi
 
 BASE = sys.argv[0] if len(sys.argv) > 0 else 'plugin://plugin.video.premiumplayer/'
 HANDLE = int(sys.argv[1]) if len(sys.argv) > 1 and str(sys.argv[1]).lstrip('-').isdigit() else -1
+ADDON_PATH = ADDON.getAddonInfo('path')
+MENU_MEDIA_ROOT = os.path.join(ADDON_PATH, 'resources', 'media', 'menu')
+MENU_FANART = os.path.join(ADDON_PATH, 'resources', 'media', 'fanart.jpg')
+TERMS_VERSION = '2026-08-25-v2'
+NEW_RELEASES_PAGE_SIZE = 100
+NEW_RELEASES_MAX_RESULTS = 300
+
+
+DEFAULT_SETTINGS = {
+    'terms_agreed': 'false',
+    'terms_version': '',
+    'max_quality': '0',
+    'max_size_gb': '10',
+    'source_limit': '80',
+    'metadata_base': 'https://v3-cinemeta.strem.io',
+    'source_base': 'https://torrentio.strem.fun',
+    'auto_fallback': 'true',
+    'wrap_fallback': 'true',
+    'startup_timeout': '15',
+    'uncached_wait': '120',
+    'auto_cleanup_playback': 'true',
+    'download_path': 'special://home/../',
+    'create_media_folders': 'true',
+    'debug': 'false',
+    'resolveurl_migration_done': 'false',
+    # Legacy Premium Player credential copies are reset too. ResolveURL owns its
+    # own settings and authorizations, so this deliberately does not touch them.
+    'rd_enabled': 'true',
+    'rd_cached_only': 'true',
+    'rd_client_id': '',
+    'rd_client_secret': '',
+    'rd_access_token': '',
+    'rd_refresh_token': '',
+    'rd_token_expires': '0',
+    'rd_username': '',
+    'tb_enabled': 'true',
+    'tb_cached_only': 'true',
+    'tb_token': '',
+    'tb_username': '',
+}
 
 
 def params():
@@ -38,14 +78,28 @@ def params():
     return {k: v[-1] for k, v in parse.parse_qs(raw).items()}
 
 
-def add_item(label, action=None, folder=True, art=None, info=None, context=None, playable=None, properties=None, **kwargs):
-    item = xbmcgui.ListItem(label=label)
+def _menu_art(name):
+    if not name:
+        return None
+    path = os.path.join(MENU_MEDIA_ROOT, '%s.png' % str(name))
+    # Match the known-working TheSportsSearch ListItem artwork contract.
+    return {'icon': path, 'thumb': path, 'fanart': MENU_FANART}
+
+
+def add_item(label, action=None, folder=True, art=None, info=None, context=None, playable=None,
+             properties=None, menu_icon=None, **kwargs):
+    # Directory entries are built off-screen, matching Kodi's recommended
+    # pattern for plugin listings.  In particular this preserves the supplied
+    # ListItem.Icon/Thumb artwork for skins that render generic file menus.
+    item = xbmcgui.ListItem(label=label, offscreen=True)
     if properties:
         for key, value in properties.items():
             try:
                 item.setProperty(str(key), str(value))
             except Exception:
                 pass
+    if not art and menu_icon:
+        art = _menu_art(menu_icon)
     if art:
         try:
             item.setArt(art)
@@ -75,9 +129,91 @@ def end(content='files'):
         xbmcplugin.endOfDirectory(HANDLE, cacheToDisc=False)
 
 
+def end_menu():
+    """Finish a navigation menu without assigning a media content type.
+
+    Kodi skins can then render ListItem.Icon in the actual row instead of
+    substituting folder/watched status glyphs. Result directories continue to
+    use end() and retain their existing content types.
+    """
+    if HANDLE >= 0:
+        xbmcplugin.endOfDirectory(HANDLE, cacheToDisc=False)
+
+
 def notify(message, error=False):
     xbmcgui.Dialog().notification(ADDON_NAME, str(message),
                                   xbmcgui.NOTIFICATION_ERROR if error else xbmcgui.NOTIFICATION_INFO, 4500)
+
+
+def _close_addon():
+    if HANDLE >= 0:
+        try:
+            xbmcplugin.endOfDirectory(HANDLE, succeeded=False, cacheToDisc=False)
+        except Exception:
+            pass
+    try:
+        xbmc.executebuiltin('Container.GoBack')
+    except Exception:
+        pass
+
+
+def ensure_terms_agreed():
+    if (setting_bool('terms_agreed', False) and
+            ADDON.getSetting('terms_version') == TERMS_VERSION):
+        return True
+    message = (
+        'Premium Player is software only. It does not host, upload, store, provide, sell, '
+        'license, control, or distribute any movies, television programs, streams, '
+        'torrents, files, links, or other media.\n\n'
+        'All media metadata, artwork, search results, source listings, torrent information, '
+        'links, files, streams, and provider data displayed or accessed through this add-on '
+        'come from independent third-party internet locations, services, networks, indexes, '
+        'or accounts. Those third parties are not owned, operated, controlled, sponsored, '
+        'endorsed, or affiliated with Premium Player or its author. Neither the add-on nor '
+        'its author verifies or represents that any item is lawful, licensed, authorized, '
+        'accurate, safe, or available.\n\n'
+        'You are solely responsible for determining and obtaining every right, license, '
+        'subscription, permission, and other authorization required for each source or item '
+        'you access, stream, download, copy, distribute, or otherwise use. You must comply '
+        'with all applicable laws, including copyright and intellectual-property laws, and '
+        'all third-party terms. A result\'s appearance or availability is not permission or '
+        'proof of legality.\n\n'
+        'Your use is entirely at your own risk. To the maximum extent permitted by applicable '
+        'law, Premium Player and its author disclaim all warranties and liability for your '
+        'use; third-party content, services, or conduct; and any legal claim, account action, '
+        'loss, damage, security or privacy issue, or other consequence arising from them. You '
+        'agree to defend, indemnify, and hold harmless Premium Player and its author from '
+        'claims, liabilities, damages, losses, costs, and expenses arising from your use, '
+        'your violation of law or third-party terms, or your infringement of another party\'s '
+        'rights.\n\n'
+        'By selecting AGREE, you confirm that you have read, understood, and accepted this '
+        'notice and assume sole legal responsibility for your use. Select DISAGREE to close '
+        'the add-on.'
+    )
+    agreed = xbmcgui.Dialog().yesno(
+        '%s - User Agreement' % ADDON_NAME, message,
+        nolabel='DISAGREE', yeslabel='AGREE')
+    if agreed:
+        ADDON.setSetting('terms_agreed', 'true')
+        ADDON.setSetting('terms_version', TERMS_VERSION)
+        return True
+    _close_addon()
+    return False
+
+
+def reset_defaults():
+    confirmed = xbmcgui.Dialog().yesno(
+        ADDON_NAME,
+        'Reset every Premium Player setting to its default value?\n\n'
+        'The user agreement will be shown again the next time the add-on starts. '
+        'ResolveURL account authorizations are not changed.',
+        nolabel='CANCEL', yeslabel='RESET')
+    if not confirmed:
+        return
+    for setting_id, value in DEFAULT_SETTINGS.items():
+        ADDON.setSetting(setting_id, value)
+    clear_active_source_session()
+    notify('All Premium Player settings were reset to defaults.')
 
 
 def _active_providers():
@@ -111,14 +247,15 @@ def _require_search_provider(show_dialog=True):
 def root():
     rd, tb, rd_active, tb_active, bridge, rurl = _active_providers()
     if rurl:
-        add_item('Search', 'search_root', True)
-        add_item('New Releases', 'new_releases_root', True)
+        add_item('Search', 'search_root', True, menu_icon='search')
+        add_item('New Releases', 'new_releases_root', True, menu_icon='new_releases')
     else:
-        add_item('Search unavailable - authorize a provider', 'open_resolveurl_settings', False, playable=False)
-    add_item('Browse Accounts', 'browse_accounts', True)
-    add_item('Pinned', 'pinned_root', True)
-    add_item('Settings', 'open_settings', False, playable=False)
-    end('videos')
+        add_item('Search unavailable - authorize a provider', 'open_resolveurl_settings', False,
+                 playable=False, menu_icon='search')
+    add_item('Browse Accounts', 'browse_accounts', True, menu_icon='accounts')
+    add_item('Pinned', 'pinned_root', True, menu_icon='pinned')
+    add_item('Settings', 'open_settings', False, playable=False, menu_icon='settings')
+    end_menu()
 
 def _pin_context(action, **kwargs):
     return [('Pin in Premium Player', 'RunPlugin(%s)' % plugin_url(BASE, action=action, **kwargs))]
@@ -205,28 +342,30 @@ def browse_accounts():
     bridge = ResolveURLBridge()
     providers = bridge.authorized_providers(torrent_capable_only=False)
     if not providers:
-        add_item('No authorized accounts - open ResolveURL settings', 'open_resolveurl_settings', False, playable=False)
-        end('files')
+        add_item('No authorized accounts - open ResolveURL settings', 'open_resolveurl_settings', False,
+                 playable=False, menu_icon='settings')
+        end_menu()
         return
     for provider in providers:
         name = str(provider.get('name') or provider.get('code') or 'ResolveURL Provider')
         lname = name.lower()
         pclass = provider.get('class')
         if lname == 'real-debrid' or pclass == 'RealDebridResolver':
-            add_item(provider_text('RD', 'Real-Debrid'), 'rd_root', True)
+            add_item(provider_text('RD', 'Real-Debrid'), 'rd_root', True, menu_icon='accounts')
         elif lname == 'torbox' or pclass == 'TorBoxResolver':
-            add_item(provider_text('TB', 'TorBox'), 'tb_root', True)
+            add_item(provider_text('TB', 'TorBox'), 'tb_root', True, menu_icon='accounts')
         elif pclass == 'AllDebridResolver':
-            add_item(provider_text('AD', 'AllDebrid'), 'cloud_root', True, provider='ad')
+            add_item(provider_text('AD', 'AllDebrid'), 'cloud_root', True, menu_icon='accounts', provider='ad')
         elif pclass == 'PremiumizeMeResolver':
-            add_item(provider_text('PM', 'Premiumize.me'), 'pm_root', True)
+            add_item(provider_text('PM', 'Premiumize.me'), 'pm_root', True, menu_icon='accounts')
         elif pclass == 'DebridLinkResolver':
-            add_item(provider_text('DL', 'Debrid-Link'), 'cloud_root', True, provider='dl')
+            add_item(provider_text('DL', 'Debrid-Link'), 'cloud_root', True, menu_icon='accounts', provider='dl')
         elif pclass == 'LinkSnappyResolver':
-            add_item(provider_text('LS', 'LinkSnappy'), 'cloud_root', True, provider='ls')
+            add_item(provider_text('LS', 'LinkSnappy'), 'cloud_root', True, menu_icon='accounts', provider='ls')
         else:
-            add_item(provider_text(provider.get('code'), name, name), 'resolveurl_provider_info', False, playable=False, provider=name)
-    end('files')
+            add_item(provider_text(provider.get('code'), name, name), 'resolveurl_provider_info', False,
+                     playable=False, menu_icon='accounts', provider=name)
+    end_menu()
 
 
 def _live_id(value):
@@ -330,13 +469,16 @@ def _prune_account_pins():
 def pinned_root():
     pins = _prune_account_pins()
     counts = {c: len([p for p in pins if p.get('category') == c]) for c in ('movies', 'tv', 'downloads')}
-    add_item('%s%s' % (media_text('movie', 'Movies'), (' (%d)' % counts['movies'] if counts['movies'] else '')), 'pinned_category', True, category='movies')
-    add_item('%s%s' % (media_text('series', 'TV Shows'), (' (%d)' % counts['tv'] if counts['tv'] else '')), 'pinned_category', True, category='tv')
-    add_item('My Torrents%s' % (' (%d)' % counts['downloads'] if counts['downloads'] else ''), 'pinned_category', True, category='downloads')
+    add_item('%s%s' % (media_text('movie', 'Movies'), (' (%d)' % counts['movies'] if counts['movies'] else '')),
+             'pinned_category', True, menu_icon='movie_pinned', category='movies')
+    add_item('%s%s' % (media_text('series', 'TV Shows'), (' (%d)' % counts['tv'] if counts['tv'] else '')),
+             'pinned_category', True, menu_icon='tv_pinned', category='tv')
+    add_item('My Torrents%s' % (' (%d)' % counts['downloads'] if counts['downloads'] else ''),
+             'pinned_category', True, menu_icon='torrents', category='downloads')
     downloaded = load_download_history(prune=True)
     if downloaded:
-        add_item('Downloaded (%d)' % len(downloaded), 'downloaded_files', True)
-    end('videos')
+        add_item('Downloaded (%d)' % len(downloaded), 'downloaded_files', True, menu_icon='downloads')
+    end_menu()
 
 
 def downloaded_files():
@@ -499,8 +641,10 @@ def search_root():
         return
     # Search prompt actions are not folders. This keeps the current Search
     # directory as the history parent; results are loaded with Container.Update.
-    add_item('Search %s' % media_text('movie', 'Movies'), 'search_prompt', False, playable=False, media_type='movie')
-    add_item('Search %s' % media_text('series', 'TV Shows'), 'search_prompt', False, playable=False, media_type='series')
+    add_item('Search %s' % media_text('movie', 'Movies'), 'search_prompt', False,
+             playable=False, menu_icon='movie_search', media_type='movie')
+    add_item('Search %s' % media_text('series', 'TV Shows'), 'search_prompt', False,
+             playable=False, menu_icon='tv_search', media_type='series')
     for row in load_search_history():
         media_type = row.get('media_type')
         query = row.get('query') or ''
@@ -508,8 +652,10 @@ def search_root():
         label = '%s - %s' % (prefix, query)
         context = [('Remove search', 'RunPlugin(%s)' % plugin_url(
             BASE, action='remove_search', media_type=media_type, query=query))]
-        add_item(label, 'search_results', True, context=context, media_type=media_type, query=query)
-    end('videos')
+        add_item(label, 'search_results', True, context=context,
+                 menu_icon=('movie_search' if media_type == 'movie' else 'tv_search'),
+                 media_type=media_type, query=query)
+    end_menu()
 
 
 def search_prompt(media_type):
@@ -1203,12 +1349,21 @@ def download_source(session, index):
         return
     source = sources_list[index]
     media = data.get('media') or {}
+    engine = PlaybackEngine()
+    cleanup = None
     try:
-        direct, provider, _cleanup = PlaybackEngine().resolve_source(source, media, track_cleanup=False)
+        cleanup_enabled = setting_bool('auto_cleanup_playback', True)
+        direct, provider, cleanup = engine.resolve_source(
+            source, media, track_cleanup=cleanup_enabled)
         suggested = source.get('filename') or media.get('label') or media.get('title')
         download_url(direct, media, suggested)
     except Exception as exc:
         xbmcgui.Dialog().ok(ADDON_NAME, 'Could not resolve this torrent for download:\n%s' % exc)
+    finally:
+        # A temporary provider item must outlive the file transfer, then be
+        # removed regardless of success, failure, or user cancellation.
+        if cleanup:
+            engine._cleanup_now(cleanup)
 
 
 
@@ -1216,38 +1371,116 @@ def new_releases_root():
     state = _require_search_provider(show_dialog=True)
     if not (state[2] or state[3] or state[5]):
         return
-    add_item(media_text('movie', 'New Movie Releases'), 'new_releases', True, media_type='movie')
-    add_item(media_text('series', 'New TV Episodes'), 'new_releases', True, media_type='series')
-    end('videos')
+    add_item(media_text('movie', 'New Movie Releases'), 'new_releases', True,
+             menu_icon='movie_new', media_type='movie')
+    add_item(media_text('series', 'New TV Episodes'), 'new_releases', True,
+             menu_icon='tv_new', media_type='series')
+    end_menu()
 
 
-def new_releases(media_type):
+def _release_date_key(meta):
+    """Return a sortable (year, month, day) tuple, newest first when reversed."""
+    for key in ('_airdate', 'lastAired', 'last_air_date', 'released',
+                'releaseDate', 'release_date', 'premiered', 'firstAired',
+                'releaseInfo', 'year'):
+        value = meta.get(key)
+        if value in (None, ''):
+            continue
+        match = re.search(r'(\d{4})(?:[-/.](\d{1,2}))?(?:[-/.](\d{1,2}))?', str(value))
+        if not match:
+            continue
+        year = int(match.group(1))
+        month = int(match.group(2) or 1)
+        day = int(match.group(3) or 1)
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            return year, month, day
+    return 0, 0, 0
+
+
+def new_releases(media_type, page=1):
     client = MetadataClient()
     try:
-        rows = client.new_releases(media_type)
+        page = max(1, min(3, int(page or 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        if media_type == 'series':
+            # TV New Releases is an episode feed only. Never pad it with a
+            # series catalog: doing so surfaces old shows by their original
+            # premiere year instead of actual newly aired episodes.
+            rows = client.new_tv_releases(days=30, limit=NEW_RELEASES_MAX_RESULTS)
+        else:
+            rows = client.new_releases(
+                media_type, limit=NEW_RELEASES_MAX_RESULTS, enrich=False)
     except Exception as exc:
         xbmcgui.Dialog().ok(ADDON_NAME, 'Could not load new releases:\n%s' % exc)
         return
-    for meta in rows:
+
+    rows = [meta for meta in list(rows or [])
+            if str(meta.get('name') or meta.get('title') or '').strip()]
+    rows = rows[:NEW_RELEASES_MAX_RESULTS]
+    # Python's sort is stable, so equal/unknown dates retain the catalog's
+    # original ordering while every known date is strictly newest-first.
+    rows.sort(key=_release_date_key, reverse=True)
+    page_count = max(1, min(3, (len(rows) + NEW_RELEASES_PAGE_SIZE - 1) // NEW_RELEASES_PAGE_SIZE))
+    page = min(page, page_count)
+    start = (page - 1) * NEW_RELEASES_PAGE_SIZE
+    page_rows = rows[start:start + NEW_RELEASES_PAGE_SIZE]
+    visible_rows = (page_rows if media_type == 'series'
+                    else client.enrich_rows(media_type, page_rows))
+    page_icon = 'movie_new' if media_type == 'movie' else 'tv_new'
+
+    for meta in visible_rows:
         title = meta.get('name') or meta.get('title') or ''
         if not title:
             continue
-        year = meta.get('releaseInfo') or meta.get('year') or ''
-        label = media_text(media_type, '%s%s' % (title, ' (%s)' % str(year)[:4] if year else ''))
+        if media_type == 'series':
+            try:
+                season = int(meta.get('season'))
+                episode = int(meta.get('episode'))
+            except (TypeError, ValueError):
+                continue
+            episode_title = meta.get('episode_title') or 'Episode %d' % episode
+            released = str(meta.get('_airdate') or meta.get('releaseInfo') or '')[:10]
+            label = media_text(
+                'series', '%s - S%02dE%02d - %s%s' %
+                (title, season, episode, episode_title,
+                 ' (%s)' % released if released else ''))
+        else:
+            year = meta.get('releaseInfo') or meta.get('year') or ''
+            label = media_text('movie', '%s%s' %
+                               (title, ' (%s)' % str(year)[:4] if year else ''))
         poster = meta.get('poster') or ''
+        thumbnail = meta.get('thumbnail') or poster
         background = meta.get('background') or ''
-        art = {'poster': poster, 'thumb': poster, 'icon': poster, 'fanart': background, 'landscape': background}
+        art = {'poster': poster, 'thumb': thumbnail, 'icon': thumbnail,
+               'fanart': background, 'landscape': thumbnail or background}
         info = {'title': title, 'plot': meta.get('description') or meta.get('plot') or ''}
-        if str(year)[:4].isdigit():
-            info['year'] = int(str(year)[:4])
         imdb = meta.get('imdb_id') or meta.get('id')
-        ctx = []
-        if imdb and str(imdb).startswith('tt'):
-            ctx = _pin_context('pin_meta', kind=('movie' if media_type == 'movie' else 'tvshow'),
-                               imdb_id=imdb, title=title)
-        add_item(label, 'search_results', True, art=art, info=info, context=ctx,
-                 media_type=media_type, query=title)
-    end('movies' if media_type == 'movie' else 'tvshows')
+        if media_type == 'series':
+            info.update({'title': episode_title, 'tvshowtitle': title,
+                         'season': season, 'episode': episode})
+            if released:
+                info['premiered'] = released
+            ctx = _pin_context('pin_meta', kind='episode', imdb_id=imdb, title=title,
+                               season=season, episode=episode,
+                               episode_title=episode_title)
+            add_item(label, 'sources', False, art=art, info=info, context=ctx,
+                     playable=False, media_type='series', imdb_id=imdb, title=title,
+                     season=season, episode=episode, episode_title=episode_title)
+        else:
+            if str(year)[:4].isdigit():
+                info['year'] = int(str(year)[:4])
+            ctx = []
+            if imdb and str(imdb).startswith('tt'):
+                ctx = _pin_context('pin_meta', kind='movie', imdb_id=imdb, title=title)
+            add_item(label, 'search_results', True, art=art, info=info, context=ctx,
+                     media_type='movie', query=title)
+
+    if page < page_count:
+        add_item('Next Page (%d/%d)' % (page + 1, page_count), 'new_releases', True,
+                 menu_icon=page_icon, media_type=media_type, page=page + 1)
+    end('movies' if media_type == 'movie' else 'episodes')
 
 
 def _next_episode_countdown():
@@ -1396,11 +1629,12 @@ def play_all_tv(imdb_id, title, start_season=None, start_episode=None):
 def rd_root():
     rd = RealDebrid()
     if not rd.resolveurl_authorized:
-        add_item('Configure Real-Debrid in ResolveURL', 'open_resolveurl_settings', False, playable=False)
+        add_item('Configure Real-Debrid in ResolveURL', 'open_resolveurl_settings', False,
+                 playable=False, menu_icon='settings')
     else:
-        add_item('Torrents', 'rd_torrents', True)
-        add_item('Downloads', 'rd_downloads', True)
-    end('files')
+        add_item('Torrents', 'rd_torrents', True, menu_icon='torrents')
+        add_item('Downloads', 'rd_downloads', True, menu_icon='downloads')
+    end_menu()
 
 
 def rd_torrents():
@@ -1544,12 +1778,13 @@ def download_rd_download(session, index):
 def tb_root():
     tb = TorBox()
     if not tb.resolveurl_authorized:
-        add_item('Configure TorBox in ResolveURL', 'open_resolveurl_settings', False, playable=False)
+        add_item('Configure TorBox in ResolveURL', 'open_resolveurl_settings', False,
+                 playable=False, menu_icon='settings')
     else:
-        add_item('Torrents', 'tb_items', True, item_type='torrent')
-        add_item('Usenet Downloads', 'tb_items', True, item_type='usenet')
-        add_item('Web Downloads', 'tb_items', True, item_type='web')
-    end('files')
+        add_item('Torrents', 'tb_items', True, menu_icon='torrents', item_type='torrent')
+        add_item('Usenet Downloads', 'tb_items', True, menu_icon='usenet', item_type='usenet')
+        add_item('Web Downloads', 'tb_items', True, menu_icon='web_downloads', item_type='web')
+    end_menu()
 
 
 def _tb_list(item_type):
@@ -1657,11 +1892,12 @@ def cloud_root(provider):
     try:
         client = _native_cloud_client(provider)
     except Exception as exc:
-        add_item('Configure provider in ResolveURL', 'open_resolveurl_settings', False, playable=False)
-        end('files')
+        add_item('Configure provider in ResolveURL', 'open_resolveurl_settings', False,
+                 playable=False, menu_icon='settings')
+        end_menu()
         return
-    add_item('Torrents', 'cloud_torrents', True, provider=provider)
-    end('files')
+    add_item('Torrents', 'cloud_torrents', True, menu_icon='torrents', provider=provider)
+    end_menu()
 
 
 def cloud_torrents(provider):
@@ -1755,11 +1991,12 @@ def delete_cloud_torrent(provider, torrent_id):
 def pm_root():
     pm = Premiumize()
     if not (pm.enabled and pm.authorized):
-        add_item('Configure Premiumize.me in ResolveURL', 'open_resolveurl_settings', False, playable=False)
+        add_item('Configure Premiumize.me in ResolveURL', 'open_resolveurl_settings', False,
+                 playable=False, menu_icon='settings')
     else:
-        add_item('Cloud Files', 'pm_folder', True, folder_id='')
-        add_item('Transfers', 'pm_transfers', True)
-    end('files')
+        add_item('Cloud Files', 'pm_folder', True, menu_icon='cloud_files', folder_id='')
+        add_item('Transfers', 'pm_transfers', True, menu_icon='transfers')
+    end_menu()
 
 
 def pm_folder(folder_id=''):
@@ -1934,6 +2171,8 @@ def _set_failed(message):
 def run():
     p = params()
     action = p.get('action', 'root')
+    if not ensure_terms_agreed():
+        return
     try:
         if action == 'root':
             root()
@@ -1969,7 +2208,7 @@ def run():
         elif action == 'new_releases_root':
             new_releases_root()
         elif action == 'new_releases':
-            new_releases(p.get('media_type', 'movie'))
+            new_releases(p.get('media_type', 'movie'), p.get('page', '1'))
         elif action == 'search_prompt':
             search_prompt(p.get('media_type', 'movie'))
         elif action == 'search_results':
@@ -2064,6 +2303,8 @@ def run():
             file_info(p.get('message', 'This file is not directly playable.'))
         elif action == 'open_settings':
             ADDON.openSettings()
+        elif action == 'reset_defaults':
+            reset_defaults()
         else:
             root()
     except Exception as exc:

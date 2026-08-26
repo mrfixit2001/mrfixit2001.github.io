@@ -15,6 +15,7 @@ from .debrid.alldebrid import AllDebrid
 from .debrid.premiumize import Premiumize
 from .debrid.debridlink import DebridLink
 from .debrid.linksnappy import LinkSnappy
+from .debrid.registry import delete_playback_item
 from .http import ApiError
 from .resolveurl_bridge import ResolveURLBridge
 from .utils import (ADDON_NAME, fallback_indices, human_size, load_session, log,
@@ -115,7 +116,28 @@ class PlaybackEngine:
             log('Could not schedule playback cleanup for %s %s: %s' % (provider, item_id, exc), xbmc.LOGWARNING)
             return False
 
-    def resolve_source(self, source, media, track_cleanup=False):
+    @staticmethod
+    def _cleanup_now(cleanup):
+        """Synchronously remove a temporary item when no playback is active."""
+        if not cleanup or not setting_bool('auto_cleanup_playback', True):
+            return False
+        provider = str(cleanup.get('provider') or '').strip().lower()
+        item_id = str(cleanup.get('item_id') or '').strip()
+        if not provider or not item_id:
+            return False
+        try:
+            deleted = delete_playback_item(provider, item_id)
+            if deleted:
+                log('Removed unused temporary item: %s %s' % (provider, item_id), xbmc.LOGDEBUG)
+            return deleted
+        except Exception as exc:
+            # Deletion may involve a short provider API round trip, but doing it
+            # here makes cancellation deterministic. Fall back to the silent
+            # worker so a transient API failure still gets another attempt.
+            log('Immediate cleanup failed for %s %s: %s' % (provider, item_id, exc), xbmc.LOGWARNING)
+            return PlaybackEngine._schedule_cleanup(cleanup, wait_for_playback=False)
+
+    def resolve_source(self, source, media, track_cleanup=False, cancel_cb=None):
         wait = setting_int('uncached_wait', 120)
         requested = str(source.get('provider') or '')
         # ResolveURL owns authorization/settings. Native clients are used where
@@ -130,7 +152,9 @@ class PlaybackEngine:
                 raise ApiError('TorBox is not enabled and authorized in ResolveURL')
             if self.tb.cached_only and source.get('tb_cached') is False:
                 raise ApiError('TorBox: not cached')
-            result = self.tb.resolve_source(source, media, wait_seconds=wait, track_cleanup=track_cleanup)
+            result = self.tb.resolve_source(
+                source, media, wait_seconds=wait, track_cleanup=track_cleanup,
+                cancel_cb=cancel_cb)
             return self._unpack_native_resolution(result, 'tb', 'TorBox', track_cleanup)
         if requested == 'resolveurl:AllDebridResolver':
             if not (self.ad.enabled and self.ad.authorized):
@@ -172,7 +196,9 @@ class PlaybackEngine:
                 raise ApiError('TorBox is not enabled and authorized')
             if self.tb.cached_only and source.get('tb_cached') is False:
                 raise ApiError('TorBox: not cached')
-            result = self.tb.resolve_source(source, media, wait_seconds=wait, track_cleanup=track_cleanup)
+            result = self.tb.resolve_source(
+                source, media, wait_seconds=wait, track_cleanup=track_cleanup,
+                cancel_cb=cancel_cb)
             return self._unpack_native_resolution(result, 'tb', 'TorBox', track_cleanup)
         raise ApiError('No enabled, authorized provider can resolve this source')
 
@@ -209,12 +235,22 @@ class PlaybackEngine:
                 cleanup = None
                 try:
                     direct, provider, cleanup = self.resolve_source(
-                        source, media, track_cleanup=cleanup_enabled)
+                        source, media, track_cleanup=cleanup_enabled,
+                        cancel_cb=progress.iscanceled)
                 except Exception as exc:
                     log('Source #%d resolution failed: %s' % (source_index + 1, exc), xbmc.LOGWARNING)
                     if not auto:
                         break
                     continue
+
+                # Cancellation can land after the provider returns a URL but
+                # before playback starts. Remove any newly-created item now;
+                # an existing account torrent never produces a cleanup token.
+                if progress.iscanceled():
+                    cancelled = True
+                    if cleanup:
+                        self._cleanup_now(cleanup)
+                    break
 
                 use_resolved_url = handle >= 0 and not resolved_once
                 if use_resolved_url:
@@ -225,7 +261,7 @@ class PlaybackEngine:
                         use_resolved_url=use_resolved_url)
                 except Exception:
                     if cleanup:
-                        self._schedule_cleanup(cleanup, wait_for_playback=False)
+                        self._cleanup_now(cleanup)
                     raise
                 if started:
                     # The provider-side item must remain alive while streaming.
@@ -237,9 +273,8 @@ class PlaybackEngine:
                     break
                 if cleanup:
                     # No stream started, so the temporary item can be removed now
-                    # without waiting on player state. Keep fallback responsive by
-                    # performing that API deletion in the background as well.
-                    self._schedule_cleanup(cleanup, wait_for_playback=False)
+                    # without waiting on player state.
+                    self._cleanup_now(cleanup)
                 log('Source #%d playback did not start (%s)' % (source_index + 1, provider), xbmc.LOGWARNING)
                 if not auto:
                     break

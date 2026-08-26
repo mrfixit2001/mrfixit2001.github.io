@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
+import base64
 import datetime
+import re
 import time
 
 import xbmc
@@ -209,6 +211,68 @@ class TorBox:
             return result
         return result.get('torrent_id') or result.get('id')
 
+    @staticmethod
+    def _normalize_hash(value):
+        """Normalize v1/v2 info hashes from raw values or magnet links."""
+        value = str(value or '').strip()
+        if not value:
+            return ''
+        match = re.search(r'(?i)(?:urn:btih:|btih:)([a-z0-9]+)', value)
+        if match:
+            value = match.group(1)
+        elif value.lower().startswith('magnet:'):
+            # Never treat an entire malformed magnet URI as an ownership key.
+            # Without a valid hash we cannot prove whether a TorBox item existed
+            # before this add-on invocation, so fail safe instead of adding it.
+            return ''
+        value = value.strip().lower()
+        if re.fullmatch(r'[a-z2-7]{32}', value):
+            try:
+                return base64.b32decode(value.upper()).hex()
+            except Exception:
+                return value
+        if re.fullmatch(r'[a-f0-9]{40}|[a-f0-9]{64}', value):
+            return value
+        return ''
+
+    @classmethod
+    def _source_hash(cls, source):
+        source = source or {}
+        for value in (source.get('hash'), source.get('info_hash'), source.get('torrent_hash'),
+                      source.get('magnet')):
+            normalized = cls._normalize_hash(value)
+            if normalized:
+                return normalized
+        return ''
+
+    @classmethod
+    def _item_hash(cls, item):
+        item = item or {}
+        for value in (item.get('hash'), item.get('info_hash'), item.get('torrent_hash'), item.get('magnet')):
+            normalized = cls._normalize_hash(value)
+            if normalized:
+                return normalized
+        return ''
+
+    @staticmethod
+    def _item_id(item):
+        item = item or {}
+        value = item.get('id')
+        if value is None:
+            value = item.get('torrent_id')
+        return value
+
+    @staticmethod
+    def _cancelled(cancel_cb=None):
+        if xbmc.Monitor().abortRequested():
+            return True
+        if cancel_cb:
+            try:
+                return bool(cancel_cb())
+            except Exception:
+                return False
+        return False
+
     def torrent_info(self, torrent_id, bypass_cache=True):
         params = {'id': torrent_id}
         # TorBox caches /mylist for up to 600 seconds. Account browsing and
@@ -221,14 +285,25 @@ class TorBox:
         return result or {}
 
     def list_torrents(self, bypass_cache=True):
-        params = {'limit': 1000}
         # TorBox documents /mylist as cached for up to 600 seconds. Using the
         # cached list after a delete makes a successfully removed torrent appear
         # to come back. Cloud/account browsing should reflect the live account.
-        if bypass_cache:
-            params['bypass_cache'] = 'true'
-        result = self.get('/torrents/mylist', params)
-        return result if isinstance(result, list) else ([] if not result else [result])
+        # Page through the account so ownership checks cannot miss an existing
+        # torrent merely because it fell beyond the first 1,000 rows.
+        rows = []
+        offset = 0
+        page_size = 1000
+        for _ in range(20):
+            params = {'limit': page_size, 'offset': offset}
+            if bypass_cache:
+                params['bypass_cache'] = 'true'
+            result = self.get('/torrents/mylist', params)
+            page = result if isinstance(result, list) else ([] if not result else [result])
+            rows.extend(page)
+            if len(page) < page_size:
+                break
+            offset += len(page)
+        return rows
 
     def delete_torrent(self, torrent_id):
         # Current TorBox control API: POST JSON {torrent_id, operation: delete}.
@@ -283,16 +358,44 @@ class TorBox:
             return result.get('url') or result.get('download') or result.get('link')
         return result
 
-    def resolve_source(self, source, media, wait_seconds=120, track_cleanup=False):
+    def resolve_source(self, source, media, wait_seconds=120, track_cleanup=False, cancel_cb=None):
         torrent_id = None
+        temporary = False
         try:
-            torrent_id = self.create_torrent(source['magnet'], cached_only=self.cached_only)
+            if self._cancelled(cancel_cb):
+                raise ApiError('Cancelled')
+
+            # Establish account ownership before creating anything. TorBox may
+            # return the ID of an account torrent that already has the same hash;
+            # such an item belongs to the user and must never enter the temporary
+            # cleanup lifecycle.
+            source_hash = self._source_hash(source)
+            if not source_hash:
+                raise ApiError('Could not determine the torrent hash safely')
+            before = self.list_torrents(bypass_cache=True)
+            before_ids = {
+                str(item_id) for item_id in (self._item_id(item) for item in before)
+                if item_id not in (None, '')
+            }
+            existing = next((item for item in before if self._item_hash(item) == source_hash), None)
+            if existing is not None:
+                torrent_id = self._item_id(existing)
+                if torrent_id in (None, ''):
+                    raise ApiError('Existing TorBox torrent did not include an ID')
+                log('Using existing TorBox account torrent %s; cleanup disabled' % torrent_id, xbmc.LOGDEBUG)
+            else:
+                if self._cancelled(cancel_cb):
+                    raise ApiError('Cancelled')
+                torrent_id = self.create_torrent(source['magnet'], cached_only=self.cached_only)
+                # ID comparison catches an existing account item even if an API
+                # response omitted or changed the hash field used above.
+                temporary = bool(torrent_id not in (None, '') and str(torrent_id) not in before_ids)
             if not torrent_id:
                 raise ApiError('TorBox did not return a torrent ID')
             deadline = time.time() + (20 if self.cached_only else max(30, int(wait_seconds)))
             info = {}
             while time.time() < deadline:
-                if xbmc.Monitor().abortRequested():
+                if self._cancelled(cancel_cb):
                     raise ApiError('Cancelled')
                 info = self.torrent_info(torrent_id)
                 files = info.get('files') or []
@@ -316,12 +419,12 @@ class TorBox:
             direct = self.request_file('torrent', torrent_id, target.get('id'))
             if not direct:
                 raise ApiError('TorBox did not return a playable URL')
-            return (direct, str(torrent_id)) if track_cleanup else direct
+            return (direct, str(torrent_id)) if track_cleanup and temporary else direct
         except Exception:
             # A playback-only transfer that never reached playback is safe to
             # remove immediately. Successful streams are cleaned by cleanup.py
             # only after Kodi reports that playback has stopped.
-            if torrent_id and track_cleanup:
+            if torrent_id and track_cleanup and temporary:
                 try:
                     self.delete_torrent(torrent_id)
                 except Exception:

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<settings>
+  
+  <category label="Free live providers">
+    <setting id="enable_samsung" type="bool" label="Samsung TV Plus" default="true" />
+    <setting id="enable_pluto" type="bool" label="Pluto TV" default="true" />
+    <setting id="enable_plex" type="bool" label="Plex Live TV" default="true" />
+    <setting id="enable_stirr" type="bool" label="STIRR" default="true" />
+    <setting id="enable_freetv" type="bool" label="Curated Free Sports TV (preflighted direct HLS)" default="true" />
+    <setting id="enable_twitch" type="bool" label="Twitch Sports Live" default="true" />
+  </category>
+  <category label="Restream sources (rotating third-party hosts)">
+    <setting id="enable_daddylive" type="bool" label="DaddyLive (events and channels)" default="true" />
+    <setting id="enable_cdnlivetv" type="bool" label="CDNLiveTV (channels and events)" default="true" />
+    <setting id="enable_istreameast" type="bool" label="IStreamEast (live events)" default="true" />
+    <setting id="enable_roxiestreams" type="bool" label="RoxieStreams (live events)" default="true" />
+    <setting id="enable_sportea" type="bool" label="Sportea (live events)" default="true" />
+    <setting id="enable_zerostreams" type="bool" label="ZeroStreams (live soccer)" default="true" />
+    <setting id="enable_streamseast" type="bool" label="StreamsEast (live events)" default="true" />
+    <setting id="enable_ondemand" type="bool" label="OnDemand (live events)" default="true" />
+    <setting id="enable_thestreameast" type="bool" label="TheStreamEast (live events)" default="false" />
+    <setting id="enable_stream720p" type="bool" label="720pStream (live events)" default="false" />
+  </category>
+  <category label="Search">
+    <setting id="results_per_provider" type="number" label="Maximum results per provider" default="12" />
+    <setting id="debug_logging" type="bool" label="Debug logging (verbose stream diagnostics)" default="false" />
+  </category>
+  <category label="Information">
+    <setting type="action" label="Reset all settings to defaults" action="RunPlugin(plugin://plugin.video.thesportssearch/?action=reset_defaults)" option="close" />
+    <setting type="action" label="Provider and privacy information" action="RunPlugin(plugin://plugin.video.thesportssearch/?action=about)" option="close" />
+    
+    <setting id="terms_accepted" type="bool" label="Terms accepted" default="false" visible="false" />
+  </category>
+</settings>
