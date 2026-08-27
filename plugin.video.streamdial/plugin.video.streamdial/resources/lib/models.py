@@ -99,6 +99,29 @@ def normalize_languages(values, default=UNKNOWN_LANGUAGE):
     return output or ([default] if default else [])
 
 
+
+CANONICAL_LANGUAGES = (
+    "English", "Spanish", "French", "German", "Italian", "Portuguese",
+    "Dutch", "Polish", "Russian", "Turkish", "Arabic", "Hindi",
+    "Chinese", "Japanese", "Korean", "Filipino",
+)
+
+
+def primary_language(values, default=UNKNOWN_LANGUAGE):
+    """Return one canonical browse language for a channel.
+
+    Provider metadata sometimes mixes language with regional/category labels
+    (for example Sling's ``European``).  Browse buckets must be mutually
+    exclusive, so only recognized languages are eligible and exactly one is
+    selected.  The original ``languages`` metadata remains intact for display.
+    """
+    normalized = normalize_languages(values, default="")
+    allowed = set(CANONICAL_LANGUAGES)
+    for value in normalized:
+        if value in allowed:
+            return value
+    return default or UNKNOWN_LANGUAGE
+
 def _genre_text(value):
     text = clean_text(value).casefold().replace("&", " ")
     text = re.sub(r"[^a-z0-9]+", " ", text)
@@ -311,22 +334,39 @@ def channel_identity_key(item):
     return " ".join(tokens)
 
 
-def dedupe_across_providers(rows):
-    """Best-effort de-duplication that NEVER collapses rows within one provider.
+def _duplicate_provider_score(row):
+    """Prefer an originating provider over another platform's restream.
 
-    For a matching identity exposed by multiple providers, one provider is
-    selected deterministically (the provider encountered first) and *all* rows
-    for that identity from that selected provider are retained. This guarantees
-    that duplicate/similarly named rows originating inside a single provider
-    are never removed by the feature.
+    Provider adapters may set ``extra.origin_provider`` when their own metadata
+    identifies the upstream service.  A matching upstream provider wins.  For
+    otherwise identical rows, direct FAST services already integrated in
+    StreamDial are preferred over device/platform aggregators.
+    """
+    provider = str((row or {}).get("provider") or "").casefold()
+    extra = (row or {}).get("extra") or {}
+    origin = str(extra.get("origin_provider") or "").casefold()
+    # Lower is better.  Explicit self-origin is strongest evidence.
+    if origin and origin == provider:
+        return (0, provider)
+    direct = {"xumo": 10, "pluto": 11, "tubi": 12, "pbs": 13, "freelivesports": 14}
+    aggregators = {"vidaa": 70, "vizio": 71, "sling": 72, "localnow": 73,
+                   "samsung": 74, "lg": 75, "tcl": 76, "roku": 77, "plex": 78}
+    return (direct.get(provider, aggregators.get(provider, 40)), provider)
+
+
+def dedupe_across_providers(rows):
+    """Best-effort cross-provider de-duplication; never de-dupe within provider.
+
+    When one platform explicitly reports that it is carrying another provider's
+    feed, prefer the originating provider if that provider is also present in the
+    result set.  Otherwise use a deterministic provider preference and retain
+    *all* same-name rows belonging to the selected provider.
     """
     rows = list(rows or [])
     groups = {}
     order = []
     for index, row in enumerate(rows):
-        key = channel_identity_key(row)
-        if not key:
-            key = "__row__{}".format(index)
+        key = channel_identity_key(row) or "__row__{}".format(index)
         if key not in groups:
             groups[key] = []
             order.append(key)
@@ -334,13 +374,25 @@ def dedupe_across_providers(rows):
 
     chosen = {}
     for key in order:
-        providers = []
+        provider_rows = {}
         for _, row in groups[key]:
             provider = str((row or {}).get("provider") or "")
-            if provider not in providers:
-                providers.append(provider)
-        if len(providers) > 1:
-            chosen[key] = providers[0]
+            provider_rows.setdefault(provider, row)
+        if len(provider_rows) <= 1:
+            continue
+
+        # If any restream row explicitly names an origin which is also present,
+        # that source of truth wins the identity.
+        explicit = []
+        for row in provider_rows.values():
+            origin = str(((row or {}).get("extra") or {}).get("origin_provider") or "")
+            if origin and origin in provider_rows:
+                explicit.append(origin)
+        if explicit:
+            selected = sorted(set(explicit), key=lambda p: _duplicate_provider_score(provider_rows[p]))[0]
+        else:
+            selected = min(provider_rows, key=lambda p: _duplicate_provider_score(provider_rows[p]))
+        chosen[key] = selected
 
     output = []
     for index, row in enumerate(rows):
@@ -349,3 +401,4 @@ def dedupe_across_providers(rows):
         if selected is None or str((row or {}).get("provider") or "") == selected:
             output.append(row)
     return output
+

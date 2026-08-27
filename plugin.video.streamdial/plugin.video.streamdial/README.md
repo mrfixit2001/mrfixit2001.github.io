@@ -22,6 +22,10 @@ The browsable provider menu contains:
 - DistroTV
 - Whale TV+
 - Free Live Sports TV
+- Vizio WatchFree+
+- Local Now
+- VIDAA Free TV
+- Sling Freestream
 
 Twitch is also included in unified search as a search-only live provider.
 
@@ -29,9 +33,11 @@ Twitch is also included in unified search as a search-only live provider.
 WORLD, NHK WORLD-JAPAN, and participating local PBS stations are channels
 inside the single PBS provider.
 
-A historical validation snapshot found 4,227 fixed browsable provider entries,
-plus dynamic Twitch search results. Runtime catalogs are refreshed from provider
-services, so counts, overlap, regional availability, and lineups can change.
+A historical validation snapshot for the original provider set found 4,227 fixed
+browsable entries. Vizio WatchFree+, Local Now, VIDAA Free TV, and Sling Freestream
+are now discovered dynamically from their provider-operated services and are not
+represented by that older bundled count snapshot. Runtime catalogs, overlap,
+regional availability, and lineups can change.
 
 ## Navigation
 
@@ -100,6 +106,11 @@ obtained from PBS-operated online services rather than a bundled callsign list.
 Widevine-capable streams have a supported setup path. `inputstream.adaptive` is
 used when needed for DASH/Widevine or adaptive HLS handling; compatible HLS can
 still use Kodi's normal playback path.
+
+Vizio WatchFree+, Local Now, VIDAA Free TV, and Sling Freestream are implemented
+as isolated provider adapters. Their catalog, tune-time resolution, request
+signing, and provider-specific DRM behavior live in their own provider modules;
+no existing provider playback path is shared or replaced by these integrations.
 
 All catalogs, schedules, artwork, manifests, and licenses are requested from
 the applicable provider or a CDN selected by that provider. Provider terms,

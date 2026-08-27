@@ -21,6 +21,10 @@ control.
 | DistroTV | `distro.tv`, `tv.jsrdn.com`, and Distro-selected CDN URLs |
 | Whale TV+ | `rlaxx.zeasn.tv`, `watch.whaletvplus.com`, and Whale-selected CDN URLs |
 | Free Live Sports TV | `freelivesports.tv`, `epg.unreel.me`, and provider-selected CDN URLs |
+| Vizio WatchFree+ | `watchfreeplus-epg-prod.smartcasttv.com` and Vizio-selected CDN URLs |
+| Local Now | `localnow.com`, the DSP API host published by Local Now at runtime, and Local Now-selected CDN URLs |
+| VIDAA Free TV | `partner.vidaahub.com`, `partner-layout-ui.vidaahub.com`, `partner-detail-ui.vidaahub.com`, and VIDAA-selected stream/license URLs |
+| Sling Freestream | `cbd46b77.cdn.cms.movetv.com`, `p-drmwv.movetv.com`, `watch.sling.com`, and Sling-selected manifest/CDN URLs |
 | Twitch | `gql.twitch.tv`, `usher.ttvnw.net`, and Twitch CDN URLs |
 
 Samsung's provider-owned public US channel lineup is fetched periodically to
@@ -46,3 +50,11 @@ No custom repository module, community catalog/playback resolver, GitHub-hosted
 runtime feed, or another video add-on is imported or contacted. Development
 references are not runtime dependencies.
 
+
+## Protocol research references
+
+The open-source FastChannels project was consulted as a reference for the
+provider protocols used by Vizio WatchFree+, Local Now, VIDAA Free TV, and Sling
+Freestream. StreamDial reimplements the required protocol directly with each
+provider. FastChannels is not contacted by StreamDial at runtime, is not bundled,
+and is not an addon dependency. iptv-org is likewise not a runtime source.

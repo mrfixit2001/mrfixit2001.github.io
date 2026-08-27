@@ -80,6 +80,12 @@ def _dedupe_enabled():
     return setting_bool("dedupe_channels", False)
 
 
+def cache_max_age_seconds():
+    """Configured browse/final-list cache lifetime. 0 means never expire."""
+    minutes = setting_int("cache_minutes", 10, 0, 60)
+    return None if minutes == 0 else minutes * 60
+
+
 def _maybe_dedupe(rows, multi_provider=False):
     rows = list(rows or [])
     if not multi_provider or not _dedupe_enabled():
@@ -99,46 +105,69 @@ def _scope_count(rows, provider):
     return len(values)
 
 
-def _language_values_counts(provider):
-    """Build language menu values/counts from one catalog snapshot.
+def _ensure_browse_summary():
+    """Return the compact menu summary; show progress only when catalog expired."""
+    dedupe = _dedupe_enabled()
+    summary = REGISTRY.cached_browse_summary(dedupe=dedupe)
+    if summary is not None:
+        _diagnostic_log("browse_summary_cache hit age={:.1f}s".format(
+            max(0.0, time.time() - float(summary.get("built_at") or 0))))
+        return summary
+    # Missing/expired summary means the shared browse snapshot also needs to be
+    # built or refreshed. _ensure_browse_snapshot owns the progress dialog.
+    _ensure_browse_snapshot()
+    return REGISTRY.browse_summary(dedupe=dedupe)
 
-    Counts are post-de-duplication only for the cross-provider scope. Single
-    providers are never de-duplicated, matching the channel-list behavior.
-    """
-    rows, failures = REGISTRY.catalogs(provider)
-    languages = sorted(
-        {language for row in rows for language in (row.get("languages") or [])},
-        key=str.casefold,
-    )
-    counts = {ALL_LANGUAGES: _scope_count(rows, provider)}
-    for language in languages:
-        subset = [row for row in rows if language in (row.get("languages") or [])]
-        counts[language] = _scope_count(subset, provider)
-    return languages, counts, failures
+
+def _scope_summary(provider):
+    summary = _ensure_browse_summary()
+    scopes = summary.get("scopes") or {}
+    return scopes.get(provider) or {
+        "total": 0, "language_counts": {}, "genres_all_languages": {}, "genres_by_language": {}}
+
+
+def _language_values_counts(provider):
+    scope = _scope_summary(provider)
+    language_counts = dict(scope.get("language_counts") or {})
+    values = sorted(language_counts, key=str.casefold)
+    counts = {ALL_LANGUAGES: int(scope.get("total") or 0)}
+    counts.update({key: int(value or 0) for key, value in language_counts.items()})
+    failures = list((_ensure_browse_summary().get("failures") or []))
+    if provider != ALL_PROVIDERS:
+        failures = [key for key in failures if key == provider]
+    return values, counts, failures
 
 
 def _genre_values_counts(provider, language):
-    """Build genre menu values/counts from one language-filtered snapshot."""
-    rows, failures = REGISTRY.filter(provider, language, ALL_GENRES)
-    genres = {genre for row in rows for genre in (row.get("genres") or [])}
+    scope = _scope_summary(provider)
+    if language == ALL_LANGUAGES:
+        genre_counts = dict(scope.get("genres_all_languages") or {})
+        all_count = int(scope.get("total") or 0)
+    else:
+        genre_counts = dict((scope.get("genres_by_language") or {}).get(language) or {})
+        all_count = int((scope.get("language_counts") or {}).get(language) or 0)
+    genres = set(genre_counts)
     ordered = [genre for genre in GENRE_ORDER if genre in genres]
     ordered.extend(sorted(genres.difference(ordered), key=str.casefold))
-    counts = {ALL_GENRES: _scope_count(rows, provider)}
-    for genre in ordered:
-        subset = [row for row in rows if genre in (row.get("genres") or [])]
-        counts[genre] = _scope_count(subset, provider)
+    counts = {ALL_GENRES: all_count}
+    counts.update({key: int(value or 0) for key, value in genre_counts.items()})
+    failures = list((_ensure_browse_summary().get("failures") or []))
+    if provider != ALL_PROVIDERS:
+        failures = [key for key in failures if key == provider]
     return ordered, counts, failures
 
 
 ENABLED = [
     key for key in (
         "pluto", "plex", "samsung", "pbs", "stirr", "roku", "lg", "xumo",
-        "tubi", "tcl", "distro", "whale", "freelivesports", "twitch",
+        "tubi", "tcl", "distro", "whale", "freelivesports", "vizio",
+        "localnow", "vidaa", "sling", "twitch",
     )
     if setting_bool("enable_" + key)
 ]
 DEBUG_DIAGNOSTICS = setting_bool("debug_diagnostics", False)
-REGISTRY = Registry(ADDON_PATH, PROFILE_PATH, ENABLED, diagnostics=DEBUG_DIAGNOSTICS)
+REGISTRY = Registry(ADDON_PATH, PROFILE_PATH, ENABLED, diagnostics=DEBUG_DIAGNOSTICS,
+                    browse_cache_max_age=cache_max_age_seconds())
 STORAGE = Storage(PROFILE_PATH)
 CHANNEL_VIEW_CACHE = ChannelViewCache(PROFILE_PATH)
 
@@ -191,6 +220,28 @@ def end_directory(content=None, succeeded=True, cache=False):
     if content:
         xbmcplugin.setContent(HANDLE, content)
     xbmcplugin.endOfDirectory(HANDLE, succeeded=succeeded, cacheToDisc=cache)
+
+
+def set_browse_category(provider=ALL_PROVIDERS, language=ALL_LANGUAGES, genre=ALL_GENRES, suffix="", show_all=False):
+    parts = []
+    if provider != ALL_PROVIDERS:
+        parts.append(REGISTRY.provider_name(provider))
+    else:
+        parts.append("All Providers")
+    if language != ALL_LANGUAGES:
+        parts.append(str(language))
+    elif show_all:
+        parts.append("All Languages")
+    if genre != ALL_GENRES:
+        parts.append(str(genre))
+    elif show_all:
+        parts.append("All Genres")
+    if suffix:
+        parts.append(str(suffix))
+    try:
+        xbmcplugin.setPluginCategory(HANDLE, " · ".join(parts))
+    except Exception:
+        pass
 
 
 def add_folder(label, action, icon, params=None, context=None, plot=""):
@@ -459,6 +510,10 @@ def _random_context(provider=ALL_PROVIDERS, language=ALL_LANGUAGES,
 
 
 def root():
+    # Returning to StreamDial's main menu is an explicit refresh boundary.
+    # The next aggregate browse rebuilds from providers even if the configured
+    # cache duration has not elapsed (or is set to Never).
+    REGISTRY.invalidate_browse_snapshot()
     add_folder(
         "Live TV Search", "search_menu", media("menu", "search.png"),
         plot="Search channel names, metadata, and available live schedules across every enabled provider.")
@@ -536,6 +591,13 @@ def _provider_progress():
         else:
             message = "{}: {} channel(s) ({}/{})".format(name, count, completed, total)
         progress.update(percent, message)
+        return not progress.iscanceled()
+
+    # Registry polls this while provider requests are still outstanding so a
+    # Cancel press can stop accepting new results without waiting for every
+    # provider to finish. Already-running HTTP requests are allowed to wind down
+    # in the background; only results completed before cancellation enter cache.
+    update.cancelled = lambda: bool(progress.iscanceled())
     return progress, update
 
 
@@ -575,6 +637,11 @@ def search_results():
         snapshot = None
     else:
         snapshot = _take_return_view(screen_key)
+        if not snapshot:
+            snapshot = CHANNEL_VIEW_CACHE.load_recent(screen_key, cache_max_age_seconds())
+            if snapshot:
+                _diagnostic_log("channel_view_cache recent hit screen={!r} rows={}".format(
+                    screen_key, len(snapshot.get("rows") or [])))
     if snapshot:
         render_channels(
             snapshot.get("rows") or [],
@@ -600,18 +667,11 @@ def search_results():
 
 def providers():
     definitions = REGISTRY.definitions(browsable_only=True)
-    snapshot = _ensure_browse_snapshot()
-    catalog_rows = list(snapshot.get("rows") or [])
-
-    # Every provider count and the All Providers aggregate comes from this exact
-    # same timestamped raw catalog. A provider that failed the snapshot is shown
-    # as zero; no stale count estimate or offline toast is substituted.
-    counts = {row["key"]: 0 for row in definitions}
-    for value in catalog_rows:
-        key = str(value.get("provider") or "")
-        if key in counts:
-            counts[key] += 1
-    total = _scope_count(catalog_rows, ALL_PROVIDERS)
+    summary = _ensure_browse_summary()
+    scopes = summary.get("scopes") or {}
+    counts = {row["key"]: int((scopes.get(row["key"]) or {}).get("total") or 0) for row in definitions}
+    total = int((scopes.get(ALL_PROVIDERS) or {}).get("total") or 0)
+    set_browse_category(ALL_PROVIDERS, suffix="Providers")
 
     all_pin = _pin("provider", "All Providers", provider=ALL_PROVIDERS)
     add_folder(
@@ -627,8 +687,8 @@ def providers():
 
 
 def provider_entry():
-    _ensure_browse_snapshot()
     provider = PARAMS.get("provider", ALL_PROVIDERS)
+    set_browse_category(provider)
     languages, language_counts, failures = _language_values_counts(provider)
     if provider == ALL_PROVIDERS or len(languages) > 1:
         _render_languages(provider, languages, failures, counts=language_counts)
@@ -661,6 +721,7 @@ def _render_provider_unavailable(provider):
 
 
 def _render_languages(provider, values, failures, counts=None):
+    set_browse_category(provider, suffix="Languages")
     values = values or []
     if failures and not values:
         _render_provider_unavailable(provider)
@@ -686,13 +747,14 @@ def _render_languages(provider, values, failures, counts=None):
 
 
 def languages():
-    _ensure_browse_snapshot()
     provider = PARAMS.get("provider", ALL_PROVIDERS)
+    set_browse_category(provider, suffix="Languages")
     values, counts, failures = _language_values_counts(provider)
     _render_languages(provider, values, failures, counts=counts)
 
 
 def _render_genres(provider, language, values, failures, counts=None):
+    set_browse_category(provider, language, suffix="Genres", show_all=(language == ALL_LANGUAGES))
     values = values or []
     counts = counts or {}
     if failures and not values:
@@ -721,9 +783,9 @@ def _render_genres(provider, language, values, failures, counts=None):
 
 
 def genres():
-    _ensure_browse_snapshot()
     provider = PARAMS.get("provider", ALL_PROVIDERS)
     language = PARAMS.get("language", ALL_LANGUAGES)
+    set_browse_category(provider, language, suffix="Genres", show_all=(language == ALL_LANGUAGES))
     values, counts, failures = _genre_values_counts(provider, language)
     if failures and not values:
         _render_provider_unavailable(provider)
@@ -740,9 +802,14 @@ def _channel_screen_key(provider, language, genre):
 
 
 def _render_channel_scope(provider, language, genre, known_failures=None):
-    _ensure_browse_snapshot()
     screen_key = _channel_screen_key(provider, language, genre)
+    set_browse_category(provider, language, genre, show_all=True)
     snapshot = _take_return_view(screen_key)
+    if not snapshot:
+        snapshot = CHANNEL_VIEW_CACHE.load_recent(screen_key, cache_max_age_seconds())
+        if snapshot:
+            _diagnostic_log("channel_view_cache recent hit screen={!r} rows={}".format(
+                screen_key, len(snapshot.get("rows") or [])))
     if snapshot:
         render_channels(
             snapshot.get("rows") or [],
@@ -751,6 +818,7 @@ def _render_channel_scope(provider, language, genre, known_failures=None):
         )
         return
 
+    _ensure_browse_snapshot()
     rows, failures = REGISTRY.filter(provider, language, genre)
     rows = _maybe_dedupe(rows, multi_provider=(provider == ALL_PROVIDERS))
     rows = REGISTRY.enrich(rows, limit=36)

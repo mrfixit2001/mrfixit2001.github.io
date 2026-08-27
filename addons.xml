@@ -172,7 +172,7 @@
 
 
     <!--- StreamDial TV -->
-    <addon id="plugin.video.streamdial" name="StreamDial TV" version="1.2.4" provider-name="mrfixit2001">
+    <addon id="plugin.video.streamdial" name="StreamDial TV" version="1.2.7" provider-name="mrfixit2001">
         <requires>
             <import addon="xbmc.python" version="3.0.0" />
             <import addon="script.module.inputstreamhelper" version="0.8.5" />

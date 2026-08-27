@@ -9,22 +9,24 @@ import time
 from .cache import JsonCache
 from .diagnostics import log_failure
 from .http import HttpClient
-from .models import ALL_GENRES, ALL_LANGUAGES, ALL_PROVIDERS, GENRE_ORDER, search_score
+from .models import (ALL_GENRES, ALL_LANGUAGES, ALL_PROVIDERS, GENRE_ORDER, search_score,
+                     primary_language, dedupe_across_providers)
 from .providers import (
-    distro, freelivesports, lg, pbs, plex, pluto, roku, samsung, stirr,
-    tcl, tubi, twitch, whale, xumo,
+    distro, freelivesports, lg, localnow, pbs, plex, pluto, roku, samsung, sling, stirr,
+    tcl, tubi, twitch, vidaa, vizio, whale, xumo,
 )
 
 
 MODULES = (
     pluto, plex, samsung, pbs, stirr, roku, lg, xumo, tubi, tcl,
-    distro, whale, freelivesports, twitch,
+    distro, whale, freelivesports, vizio, localnow, vidaa, sling, twitch,
 )
 
 _SCHEDULE_INDEX_KEY = "schedule-search-index-v1"
 _SCHEDULE_INDEX_MAX_AGE = 30 * 60
 _BROWSE_SNAPSHOT_MAX_AGE = 10 * 60
-_BROWSE_SNAPSHOT_VERSION = 1
+_BROWSE_SNAPSHOT_VERSION = 2
+_BROWSE_SUMMARY_VERSION = 1
 
 
 class ProviderContext:
@@ -36,7 +38,7 @@ class ProviderContext:
 
 
 class Registry:
-    def __init__(self, addon_path, profile_path, enabled=None, diagnostics=False):
+    def __init__(self, addon_path, profile_path, enabled=None, diagnostics=False, browse_cache_max_age=_BROWSE_SNAPSHOT_MAX_AGE):
         self.addon_path = addon_path
         self.profile_path = profile_path
         self.enabled = set(enabled or [module.KEY for module in MODULES])
@@ -44,6 +46,7 @@ class Registry:
         self.menu_cache = JsonCache(profile_path)
         self.fallback_counts = self._bundled_provider_counts()
         self.diagnostics_enabled = bool(diagnostics)
+        self.browse_cache_max_age = browse_cache_max_age
 
     def context(self):
         return ProviderContext(self.addon_path, self.profile_path)
@@ -56,6 +59,10 @@ class Registry:
             if browsable_only and not module.BROWSABLE:
                 continue
             rows.append({"key": module.KEY, "name": module.NAME, "browsable": module.BROWSABLE})
+        def alpha_key(row):
+            value = str(row.get("name") or "").strip().casefold()
+            return value[4:] if value.startswith("the ") else value
+        rows.sort(key=alpha_key)
         return rows
 
     def provider_name(self, key):
@@ -80,13 +87,15 @@ class Registry:
         keys = [row["key"] for row in self.definitions(browsable_only=True)]
         return "browse-catalog-v{}-{}".format(_BROWSE_SNAPSHOT_VERSION, ",".join(keys))
 
-    def cached_browse_snapshot(self, max_age=_BROWSE_SNAPSHOT_MAX_AGE):
+    def cached_browse_snapshot(self, max_age=None):
         """Return the shared browse catalog while it is timestamp-valid.
 
         Every provider/language/genre browse menu is derived from this one raw
         snapshot.  Cross-provider de-duplication remains a presentation choice
         in default.py so toggling that setting never requires a provider reload.
         """
+        if max_age is None:
+            max_age = self.browse_cache_max_age
         payload = self.menu_cache.get(self._browse_snapshot_key(), max_age, None)
         if not isinstance(payload, dict):
             return None
@@ -102,7 +111,7 @@ class Registry:
             return None
         return {
             "built_at": built_at,
-            "rows": copy.deepcopy(rows),
+            "rows": rows,
             "failures": [str(value) for value in failures],
         }
 
@@ -112,24 +121,56 @@ class Registry:
         rows = []
         failures = []
         if keys:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(keys))) as pool:
-                futures = {pool.submit(self._catalog_one, key): key for key in keys}
-                completed = 0
-                for future in concurrent.futures.as_completed(futures):
-                    key = futures[future]
-                    try:
-                        values = future.result()
-                        rows.extend(values)
-                        status = "ok"
-                    except Exception as error:
-                        values = []
-                        failures.append(key)
-                        status = "error"
-                        if self.diagnostics_enabled:
-                            log_failure("catalog", error, provider=key)
-                    completed += 1
-                    if progress:
-                        progress(completed, len(keys), key, self.provider_name(key), status, len(values))
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(keys)))
+            futures = {pool.submit(self._catalog_one, key): key for key in keys}
+            pending = set(futures)
+            completed = 0
+            cancelled = False
+            try:
+                while pending:
+                    if progress and getattr(progress, "cancelled", lambda: False)():
+                        cancelled = True
+                        break
+                    done, pending = concurrent.futures.wait(
+                        pending, timeout=0.15, return_when=concurrent.futures.FIRST_COMPLETED)
+                    if not done:
+                        continue
+                    for future in done:
+                        key = futures[future]
+                        try:
+                            values = future.result()
+                            rows.extend(values)
+                            status = "ok"
+                        except Exception as error:
+                            values = []
+                            failures.append(key)
+                            status = "error"
+                            if self.diagnostics_enabled:
+                                log_failure("catalog", error, provider=key)
+                        completed += 1
+                        if progress and progress(
+                                completed, len(keys), key, self.provider_name(key), status, len(values)) is False:
+                            cancelled = True
+                            break
+                    if cancelled:
+                        break
+            finally:
+                if cancelled:
+                    for future in pending:
+                        future.cancel()
+                    # Do not make Cancel wait for unrelated providers. Requests
+                    # already inside urllib may finish naturally, but their rows
+                    # are intentionally excluded from this partial snapshot.
+                    pool.shutdown(wait=False, cancel_futures=True)
+                else:
+                    pool.shutdown(wait=True)
+            if cancelled:
+                completed_keys = {str(row.get("provider") or "") for row in rows}
+                failed_keys = set(failures)
+                # Providers not yet completed are represented as zero channels in
+                # the partial snapshot and will be retried at the next refresh.
+                failures.extend(key for key in keys if key not in completed_keys and key not in failed_keys)
+
 
         unique = {}
         for row in rows:
@@ -140,9 +181,16 @@ class Registry:
             "failures": list(dict.fromkeys(failures)),
         }
         self.menu_cache.set(self._browse_snapshot_key(), payload)
+        # Precompute compact menu summaries while rows are already in memory.
+        # Subsequent provider/language/genre BACK navigation reads these small
+        # summaries instead of reparsing the multi-thousand-row catalog JSON.
+        self.menu_cache.set(self._browse_summary_key(False), self._make_browse_summary(
+            payload["rows"], payload["failures"], payload["built_at"], dedupe=False))
+        self.menu_cache.set(self._browse_summary_key(True), self._make_browse_summary(
+            payload["rows"], payload["failures"], payload["built_at"], dedupe=True))
         return {
             "built_at": payload["built_at"],
-            "rows": copy.deepcopy(payload["rows"]),
+            "rows": payload["rows"],
             "failures": list(payload["failures"]),
         }
 
@@ -154,7 +202,80 @@ class Registry:
         return self.build_browse_snapshot(progress=progress)
 
     def invalidate_browse_snapshot(self):
-        return self.menu_cache.delete(self._browse_snapshot_key())
+        changed = self.menu_cache.delete(self._browse_snapshot_key())
+        self.menu_cache.delete(self._browse_summary_key(False))
+        self.menu_cache.delete(self._browse_summary_key(True))
+        return changed
+
+    def _browse_summary_key(self, dedupe=False):
+        return self._browse_snapshot_key() + "-summary-v{}-{}".format(
+            _BROWSE_SUMMARY_VERSION, "dedupe" if dedupe else "raw")
+
+    def _make_browse_summary(self, rows, failures, built_at, dedupe=False):
+        raw_values = list(rows or [])
+        aggregate_values = dedupe_across_providers(raw_values) if dedupe else raw_values
+        definitions = self.definitions(browsable_only=True)
+        by_provider = {row["key"]: [] for row in definitions}
+        # Provider scopes always use the raw provider catalog. Cross-provider
+        # de-duplication applies only to aggregate scopes and can therefore never
+        # change a single provider's channel count.
+        for row in raw_values:
+            by_provider.setdefault(str(row.get("provider") or ""), []).append(row)
+
+        def scope_summary(scope_rows):
+            language_counts = {}
+            language_genres = {}
+            language_rows = {}
+            for row in scope_rows:
+                lang = row.get("browse_language", primary_language(row.get("languages") or [], "English"))
+                language_rows.setdefault(lang, []).append(row)
+            for lang, lrows in language_rows.items():
+                language_counts[lang] = len(lrows)
+                genres = {}
+                for row in lrows:
+                    for genre in row.get("genres") or []:
+                        genres[genre] = genres.get(genre, 0) + 1
+                language_genres[lang] = genres
+            all_genres = {}
+            for row in scope_rows:
+                for genre in row.get("genres") or []:
+                    all_genres[genre] = all_genres.get(genre, 0) + 1
+            return {
+                "total": len(scope_rows),
+                "language_counts": language_counts,
+                "genres_all_languages": all_genres,
+                "genres_by_language": language_genres,
+            }
+
+        scopes = {ALL_PROVIDERS: scope_summary(aggregate_values)}
+        # Single-provider scopes are intentionally raw even when cross-provider
+        # de-duplication is enabled: StreamDial never de-dupes within a provider.
+        for definition in definitions:
+            scopes[definition["key"]] = scope_summary(by_provider.get(definition["key"], []))
+        return {
+            "built_at": float(built_at or time.time()),
+            "failures": list(failures or []),
+            "scopes": scopes,
+        }
+
+    def cached_browse_summary(self, dedupe=False):
+        payload = self.menu_cache.get(
+            self._browse_summary_key(bool(dedupe)), self.browse_cache_max_age, None)
+        if isinstance(payload, dict) and isinstance(payload.get("scopes"), dict):
+            return payload
+        return None
+
+    def browse_summary(self, dedupe=False):
+        key = self._browse_summary_key(bool(dedupe))
+        payload = self.menu_cache.get(key, self.browse_cache_max_age, None)
+        if isinstance(payload, dict) and isinstance(payload.get("scopes"), dict):
+            return payload
+        snapshot = self.browse_snapshot()
+        payload = self._make_browse_summary(
+            snapshot.get("rows") or [], snapshot.get("failures") or [],
+            snapshot.get("built_at") or time.time(), dedupe=bool(dedupe))
+        self.menu_cache.set(key, payload)
+        return payload
 
     def cached_provider_counts(self, max_age=12 * 60 * 60):
         marker = object()
@@ -194,6 +315,7 @@ class Registry:
             value = copy.deepcopy(row)
             value["provider"] = key
             value["provider_name"] = module.NAME
+            value["browse_language"] = primary_language(value.get("languages") or [], "English")
             output.append(value)
         if module.BROWSABLE:
             self.menu_cache.set(self._provider_count_key(key), len(output))
@@ -219,7 +341,7 @@ class Registry:
         rows, failures = self.catalogs(provider)
         output = []
         for row in rows:
-            if language != ALL_LANGUAGES and language not in (row.get("languages") or []):
+            if language != ALL_LANGUAGES and language != row.get("browse_language", primary_language(row.get("languages") or [], "English")):
                 continue
             if genre != ALL_GENRES and genre not in (row.get("genres") or []):
                 continue
@@ -229,7 +351,7 @@ class Registry:
 
     def languages(self, provider=ALL_PROVIDERS):
         rows, failures = self.catalogs(provider)
-        values = sorted({language for row in rows for language in row.get("languages") or []}, key=str.casefold)
+        values = sorted({row.get("browse_language", primary_language(row.get("languages") or [], "English")) for row in rows}, key=str.casefold)
         return values, failures
 
     def genres(self, provider=ALL_PROVIDERS, language=ALL_LANGUAGES):

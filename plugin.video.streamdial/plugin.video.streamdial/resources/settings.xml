@@ -7,6 +7,7 @@
         <setting id="default_language" type="select" label="Default Language" values="English|Spanish|French|German|Italian|Portuguese|Dutch|Polish|Russian|Turkish|Arabic|Hindi|Chinese|Japanese|Korean|Filipino" default="English" />
         <setting id="dedupe_channels" type="bool" label="De-duplicate matching channels across providers" default="false" />
         <setting id="debug_diagnostics" type="bool" label="Debug log diagnostics" default="false" />
+        <setting id="cache_minutes" type="number" label="Browse/list cache duration in minutes (0 = Never, 1–60)" default="10" />
     </category>
     <category label="Direct public providers">
         <setting id="enable_pluto" type="bool" label="Pluto TV" default="true" />
@@ -22,6 +23,10 @@
         <setting id="enable_distro" type="bool" label="DistroTV" default="true" />
         <setting id="enable_whale" type="bool" label="Whale TV+" default="true" />
         <setting id="enable_freelivesports" type="bool" label="Free Live Sports TV" default="true" />
+        <setting id="enable_vizio" type="bool" label="Vizio WatchFree+" default="true" />
+        <setting id="enable_localnow" type="bool" label="Local Now" default="true" />
+        <setting id="enable_vidaa" type="bool" label="VIDAA Free TV" default="true" />
+        <setting id="enable_sling" type="bool" label="Sling Freestream" default="true" />
         <setting id="enable_twitch" type="bool" label="Twitch (search only)" default="true" />
     </category>
 </settings>
