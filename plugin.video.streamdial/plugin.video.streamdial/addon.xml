@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="plugin.video.streamdial" name="StreamDial TV" version="1.2.4" provider-name="mrfixit2001">
+    <requires>
+        <import addon="xbmc.python" version="3.0.0" />
+        <import addon="script.module.inputstreamhelper" version="0.8.5" />
+        <import addon="inputstream.adaptive" version="2.0.0" optional="true" />
+    </requires>
+    <extension point="xbmc.python.pluginsource" library="default.py">
+        <provides>video</provides>
+    </extension>
+    <extension point="xbmc.addon.metadata">
+        <summary lang="en_GB">Search, browse, and watch free live television</summary>
+        <description lang="en_GB">StreamDial TV combines direct public live-TV catalogs into one searchable browser. Browse by provider, language, or genre, see available schedules in local time, pin favorite destinations, and play a random channel.</description>
+        <disclaimer lang="en_GB">Stream availability, regional access, schedules, and advertising are controlled by each provider. StreamDial TV does not host or restream video.</disclaimer>
+        <platform>all</platform>
+        <license>MIT</license>
+        <assets>
+            <icon>icon.png</icon>
+            <fanart>fanart.jpg</fanart>
+        </assets>
+    </extension>
+</addon>

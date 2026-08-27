@@ -1,0 +1,134 @@
+1.2.4
+- Fixed the final channel-screen playback-return cache so repeated Kodi directory reloads return immediately to the same cached channel/search results instead of consuming a one-use marker and rebuilding on a second reload. Fresh navigation/searches still replace the cached final list, resolver failures invalidate it, and the 30-minute age limit remains.
+- Corrected the author spelling to mrfixit2001 throughout the add-on.
+- Samsung TV Plus now periodically overlays known seeded channels with the current provider-owned Samsung US lineup for channel names, numbers, and categories. The bundled technical playback seed remains only because Samsung's public consumer lineup does not expose tune-time service IDs/manifest paths for newly added channels.
+- Removed the bundled PBS callsign allow-list. PBS now combines its official station service with PBS's own Live Streaming FAQ roster, with an official-station-API fallback if the help page changes or is unavailable. PBS KIDS clear-HLS playback is unchanged.
+- Provider coverage documentation now welcomes additional direct-provider requests through mrfixit2001's GitHub profile.
+- Reworked genre normalization to use token/phrase boundaries instead of substring matches, added provider-category aliases that can map one source category to multiple StreamDial genres, and added semicolon-separated multi-genre support.
+- Pluto and LG channel classification now treats provider channel-level categories as authoritative and uses scheduled-program genres only when channel-level genre metadata is absent. This prevents schedule metadata from permanently placing channels such as Pluto Funny AF into unrelated genres such as Sports.
+- Channels with multiple normalized genres continue to appear independently under every applicable genre.
+
+1.2.3
+- Added one shared 10-minute timestamped browse catalog used by provider, language, genre, pinned aggregate, random, and channel-list browsing; browse counts can no longer drift because separate menu paths rebuilt providers at different times.
+- Building an expired/missing shared browse catalog now shows a provider-by-provider progress dialog; valid cached snapshots open immediately without flashing the progress UI.
+- Provider failures during a snapshot are represented as 0 channels in Browse Providers and no longer produce browse-time provider-offline toasts or stale fallback count estimates.
+- All Providers, All Languages, All Genres, individual language/genre counts, and pinned aggregate counts are derived from the exact same snapshot and respect post-de-dup totals when cross-provider de-duplication is enabled.
+- Browse by Genre now starts from All Languages, so the full-scope All Genres count represents the same universe as All Providers and All Languages.
+- Single-provider scopes remain exempt from cross-provider de-duplication, and playback still resolves fresh at tune time rather than using cached stream details.
+
+1.2.2
+- Fixed pinned live channels so Kodi marks them playable and enters the normal setResolvedUrl playback pipeline.
+- Added channel counts to All Languages and each language selection entry.
+- Added channel counts to All Genres and each genre selection entry.
+- When cross-provider de-duplication is enabled, All Providers, All Languages, language, All Genres, and genre counts now reflect the post-de-dup channel lists.
+- De-duplication remains strictly cross-provider and never removes same-provider rows.
+- All Languages under All Providers now remains a true all-language scope instead of being redirected to the configured default language.
+
+1.2.1
+- Improved Roku Spanish classification for rows whose language tags are missing, including FILMEX Accion/Clasico/Comedia-style titles; bumped the Roku catalog cache so old classifications are discarded.
+- Xumo playback now falls back from missing ssaiStreamUrl metadata to Xumo's own current-broadcast asset/provider sources, with an alternate Xumo API host retry and structured diagnostics if no HLS source exists.
+- Added General > De-duplicate matching channels across providers (off by default). It applies only to multi-provider channel/search result lists.
+- De-duplication is strictly cross-provider: it never collapses duplicate/similarly named rows originating from one provider; when an identity overlaps providers, one provider is selected and all matching rows from that selected provider remain.
+
+1.2.0
+- Replaced fanart with the user-selected premium intergalactic/electric StreamDial composition, mechanically fitted to 1920x1080; main and provider icons are unchanged.
+- Roku now derives language from Roku station metadata and language tags (including spanish-language) instead of hardcoding every row to English; the Roku catalog cache was bumped so old language metadata is discarded immediately.
+- Unified search continues to match channel names and now scores provider-published program titles before filtering results. Bulk/inline guides are searched directly, while recently fetched per-channel schedules are reused through a 30-minute schedule index to avoid unsafe hundreds-of-request Roku/Plex fan-out.
+- Strengthened the provider search progress dialog so it advances and names each provider as its search completes.
+- Added a timestamped one-screen channel-view cache. Successful playback can return to the exact prior list immediately for up to 30 minutes; the marker is one-use, explicit navigation rebuilds/replaces the snapshot, and resolver failures invalidate it so stale failing rows are not restored.
+- Added required addon dependency script.module.inputstreamhelper 0.8.5.
+- Audited runtime endpoints/dependencies: StreamDial contains no custom repository dependency or third-party catalog/playback resolver; provider adapters contact their provider/API/CDN resources directly.
+- Preserved opt-in Debug log diagnostics and the StreamDial-only playback-failure toast rate limiting from 1.1.9.
+
+1.1.9
+- Added a General > Debug log diagnostics setting (off by default). StreamDial's structured catalog/search/schedule/playback diagnostics, manifest probes, and Widevine preflight details are now emitted only when this setting is enabled.
+- Expanded opt-in playback diagnostics to every provider, including a privacy-redacted plan/handoff block and manifest probe for every HLS/DASH handoff plus structured failure details for every provider resolve path.
+- Reworked playback-failure toasts so StreamDial never uses Kodi's global notification-window visibility as a suppression flag, rate-limits only its own repeated failure toast across short-lived plugin invocations, and gives Kodi's GUI thread time to commit the toast before signalling setResolvedUrl(false).
+- Added a safe built-in Notification fallback only when Dialog().notification itself throws; a successful Dialog submission is never duplicated.
+- Roku listings now exclude EPG rows with no viewOptions at all. The supplied logs prove this row class has no cached/live playId and its content proxy returns 404, so it cannot reach /api/v3/playback. Rows with viewOptions but a missing playId are retained for tune-time content-proxy refresh.
+- Corrected Roku live-EPG diagnostics so live_epg_stations is the full station count rather than the matched row ordinal, and added bounded station/meta key-shape information for future resolver troubleshooting.
+- PBS KIDS playback behavior is unchanged.
+
+1.1.8
+- Fixed stale Roku lineup rows surviving upgrades: the Roku catalog cache is now versioned again, the old v2 cache is discarded, and the live lineup cache lifetime is reduced from 30 minutes to 10 minutes.
+- Roku channels that are proven unavailable through both the current content proxy and current EPG are temporarily hidden and force a fresh catalog on the next browse instead of remaining as repeatedly failing rows.
+- Expanded Roku live-EPG diagnostics to distinguish a channel that is absent from the current lineup from a channel that is present but has no playId, including the number of station rows returned by the live EPG.
+- Preserved HLS-first playback and the working DASH/Widevine fallback for Roku channels with a valid playId.
+- PBS KIDS remains on its confirmed-working clear HLS route; no PBS playback changes in this release.
+
+1.1.7
+- Kept the confirmed-working PBS KIDS clear-HLS path unchanged; PBS KIDS still bypasses Widevine entirely.
+- Restored Roku DASH/Widevine fallback behind HLS-first playback now that a compatible Widevine CDM can be used on the target system. FairPlay/SAMPLE-AES Roku HLS therefore falls through to Roku's Widevine DASH rendition instead of being rejected outright.
+- Roku now prefers a same-session content-proxy playId before using the disk-cached EPG playId, reducing cookie/CSRF/playId session mismatches across short-lived Kodi plugin invocations.
+- Added a live same-session EPG playId lookup after cheaper playId sources fail, followed by one completely fresh anonymous Roku session retry.
+- Roku tries both m3u/HLS and MPEG-DASH for failed/incompatible playIds while retaining clear/AES-128 HLS as the preferred path.
+- Expanded Roku failure diagnostics to record every session, playId source, media format, HTTP status, manifest compatibility result, cookie/_usn state, endpoint URL, content type, and a bounded/redacted HTTP error body.
+- HTTP failures now retain bounded response metadata for provider diagnostics without exposing it in normal user-facing errors.
+
+1.1.6
+- PBS KIDS now resolves directly to PBS's clear national HLS feed and no longer invokes Widevine.
+- Roku playback is now deliberately HLS-only; DASH/Widevine fallback was removed so a DRM-only Roku channel cannot crash Kodi on affected ARM64 systems.
+- Roku playback 404 recovery now bypasses stale EPG playIds and fetches a fresh per-channel playId from Roku's content proxy before retrying.
+- Roku performs one final clean anonymous-session/cookie/CSRF refresh before declaring a channel unavailable.
+- Roku playback requests now require a real playId and use the current web-client HLS request envelope consistently; the no-playId and compact fallback requests were removed.
+- Roku HLS preflight now rejects FairPlay/SAMPLE-AES/non-identity DRM key formats while continuing to allow normal AES-128 HLS.
+- Roku playback diagnostics now report the selected HLS resolution path separately from PBS diagnostics.
+
+1.1.5
+- Corrected the fanart by using the actual approved fanart scene from the prior preview, removing preview UI remnants and extending only the dark left background to 1920x1080. The main icon remains unchanged.
+- Provider icons remain byte-for-byte identical to the pre-redesign 1.1.1 provider badges.
+- Preserved Default Language support for direct Browse by Genre and the single-language/single-genre navigation bypasses.
+- Roku schedule metadata 404s are now treated as missing guide data instead of provider/channel failures.
+- Roku playback now tolerates a missing content-proxy playId and still attempts the playback endpoint, refreshes stale catalog/playId data, retries HLS, and only falls back to DASH/Widevine after direct HLS options are exhausted.
+- Roku HLS is preflighted for Apple FairPlay signaling (com.apple.streamingkeydelivery), the exact InputStream Adaptive parse failure seen in the supplied log. AES-128 Roku HLS remains allowed and does not require Widevine.
+- Roku playback diagnostics now probe manifests and report Apple FairPlay, AES-128, SAMPLE-AES, Widevine, PSSH, and ContentProtection signals.
+- Reviewed a third-party Widevine installer and deliberately did not internalize its custom-repository/custom-download mechanism.
+
+1.1.2
+- Rebuilt list artwork at 1024px with a premium neon/glass treatment; English now uses the United States flag.
+- Updated fanart to use the current StreamDial TV television/dial/Wi-Fi identity without logo text.
+- Widevine playback now checks the local CDM before handoff. If missing, StreamDial dynamically uses an installed InputStream Helper without making it a dependency; otherwise it explains what the user must install/run.
+- PBS Widevine streams now stop before a doomed player handoff and launch the normal InputStream Helper Widevine install flow when available.
+- Roku playback now retries 404 responses with a fresh play id and a compact playback payload, and the Roku schedule proxy no longer encodes featureInclude into the target path.
+- Providers/languages with only one resulting genre now skip the genre menu and open channels directly.
+
+1.1.1
+- Added current channel totals after every provider name and a combined total
+  after All Providers.
+- Added a validated count snapshot for an immediate first provider menu; each
+  displayed count refreshes from the direct catalog as that provider is used.
+- Added correlated playback-handoff diagnostics so Kodi/InputStream failures
+  that happen after stream resolution still have a usable attempt record.
+- PBS diagnostics now include callsign, feed profile, selected HLS/DASH source,
+  DRM availability, safe manifest probe status/type/marker, Widevine/pssh
+  signals, Widevine CDM presence hints, and InputStream Adaptive
+  availability/version.
+- PBS missing-feed errors now list the requested and provider-advertised feed
+  profiles without exposing cookies, tokens, or license values.
+
+1.1.0
+- Redesigned the 1024px main icon with the StreamDial TV name, globe/network,
+  antenna television, dial, and Wi-Fi identity; retained premium 1080p fanart.
+- Replaced provider menu badges with official/provider-owned logos.
+- Consolidated PBS KIDS into PBS and added local PBS, PBS KIDS 24/7, PBS Create,
+  PBS WORLD, and NHK WORLD-JAPAN channels under that provider.
+- Fixed PBS KIDS DASH/Widevine playback.
+- Fixed Pluto TV channel-specific playback so different rows no longer resolve
+  to one generic advertisement stream.
+- Fixed Plex anonymous catalog/tune playback and STIRR nonce/session playback.
+- Expanded Samsung TV Plus from a sports-only subset to 512 channels across
+  news, movies, kids, entertainment, lifestyle, music, crime, and other genres.
+- Added direct Roku, LG Channels, Xumo Play, Tubi Live TV, TCLtv+, DistroTV,
+  Whale TV+, and Free Live Sports TV providers.
+- Added cached provider-direct Roku and Xumo schedules for visible channel rows.
+- Removed blank intermediate provider pages and preserved Kodi's immediate
+  provider/language/genre/channel Back hierarchy.
+- Added actionable, privacy-redacted diagnostics for catalog, search, schedule,
+  and playback failures.
+- Added Filipino language normalization and flag artwork.
+
+1.0.0
+- Initial StreamDial TV release.
+- Unified direct-provider search and browsing.
+- Provider, language, genre, and channel pins.
+- Saved searches, local-time schedule display, and random play.

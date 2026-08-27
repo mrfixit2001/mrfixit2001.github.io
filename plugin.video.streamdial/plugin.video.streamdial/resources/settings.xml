@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<settings>
+    <category label="General">
+        <setting id="use_inputstream" type="bool" label="Use InputStream Adaptive when available" default="true" />
+        <setting id="schedule_hours" type="number" label="Schedule hours shown (2–24)" default="8" />
+        <setting id="search_limit" type="number" label="Maximum search results per provider (5–100)" default="30" />
+        <setting id="default_language" type="select" label="Default Language" values="English|Spanish|French|German|Italian|Portuguese|Dutch|Polish|Russian|Turkish|Arabic|Hindi|Chinese|Japanese|Korean|Filipino" default="English" />
+        <setting id="dedupe_channels" type="bool" label="De-duplicate matching channels across providers" default="false" />
+        <setting id="debug_diagnostics" type="bool" label="Debug log diagnostics" default="false" />
+    </category>
+    <category label="Direct public providers">
+        <setting id="enable_pluto" type="bool" label="Pluto TV" default="true" />
+        <setting id="enable_plex" type="bool" label="Plex Live TV" default="true" />
+        <setting id="enable_stirr" type="bool" label="STIRR" default="true" />
+        <setting id="enable_samsung" type="bool" label="Samsung TV Plus" default="true" />
+        <setting id="enable_pbs" type="bool" label="PBS" default="true" />
+        <setting id="enable_roku" type="bool" label="The Roku Channel" default="true" />
+        <setting id="enable_lg" type="bool" label="LG Channels" default="true" />
+        <setting id="enable_xumo" type="bool" label="Xumo Play" default="true" />
+        <setting id="enable_tubi" type="bool" label="Tubi Live TV" default="true" />
+        <setting id="enable_tcl" type="bool" label="TCLtv+" default="true" />
+        <setting id="enable_distro" type="bool" label="DistroTV" default="true" />
+        <setting id="enable_whale" type="bool" label="Whale TV+" default="true" />
+        <setting id="enable_freelivesports" type="bool" label="Free Live Sports TV" default="true" />
+        <setting id="enable_twitch" type="bool" label="Twitch (search only)" default="true" />
+    </category>
+</settings>
