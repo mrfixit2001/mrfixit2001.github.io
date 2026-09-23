@@ -19,6 +19,8 @@ from .debrid.registry import client_for_account, PROVIDER_CODES
 from .downloads import download_url
 from .http import ApiError
 from .metadata import MetadataClient
+from .account_metadata import (clear_account_metadata_cache, looks_like_series_tree,
+                               match_entries, media_sort_key, update_account_item_count)
 from .playback import PlaybackEngine
 from .resolveurl_bridge import ResolveURLBridge
 from .sources import TorrentSourceClient
@@ -119,6 +121,42 @@ def add_item(label, action=None, folder=True, art=None, info=None, context=None,
         item.addContextMenuItems(context)
     url = plugin_url(BASE, action=action, **kwargs) if action else BASE
     xbmcplugin.addDirectoryItem(HANDLE, url, item, isFolder=folder)
+
+
+def _metadata_context(media_type='', title='', imdb='', year='', season=''):
+    context = {}
+    if media_type:
+        context['media_type'] = str(media_type)
+    if title:
+        context['title'] = str(title)
+    if imdb:
+        context['imdb'] = str(imdb)
+    if year not in ('', None):
+        try:
+            context['year'] = int(year)
+        except Exception:
+            pass
+    if season not in ('', None):
+        try:
+            context['season'] = int(season)
+        except Exception:
+            pass
+    return context
+
+
+def _metadata_context_kwargs(context):
+    context = context or {}
+    return {
+        'meta_type': context.get('media_type'),
+        'meta_title': context.get('title'),
+        'meta_imdb': context.get('imdb'),
+        'meta_year': context.get('year'),
+        'meta_season': context.get('season'),
+    }
+
+
+def _child_metadata_context(matched, inherited=None):
+    return (matched or {}).get('context') or (inherited or {})
 
 
 def end(content='files'):
@@ -1943,8 +1981,19 @@ def rd_torrents():
     except Exception as exc:
         xbmcgui.Dialog().ok(ADDON_NAME, 'Could not load Real-Debrid torrents:\n%s' % exc)
         return
+    update_account_item_count('rd', 'torrents', len(items))
+    names = [item.get('filename') or '' for item in items]
+    series_names = [item.get('filename') or '' for item in items
+                    if looks_like_series_tree(item.get('files') or [])]
+    series_set = set(series_names)
+    metadata = match_entries([name for name in names if name not in series_set],
+                             container=True, provider='rd')
+    if series_names:
+        metadata.update(match_entries(series_names, container=True, series_hint=True, provider='rd'))
     for item in items:
-        label = item.get('filename') or item.get('hash') or str(item.get('id'))
+        raw_name = item.get('filename') or ''
+        matched = metadata.get(raw_name, {})
+        label = raw_name or item.get('hash') or str(item.get('id'))
         status = item.get('status') or ''
         if status:
             label += '  [%s]' % status
@@ -1953,7 +2002,9 @@ def rd_torrents():
         context = [('Delete torrent', 'RunPlugin(%s)' % plugin_url(
             BASE, action='delete_rd_torrent', torrent_id=item.get('id')))]
         context += _pin_context('pin_account', kind='rd_torrent', provider='rd', label=label, torrent_id=item.get('id'))
-        add_item(label, 'browse_rd_torrent', True, context=context, torrent_id=item.get('id'), prefix='')
+        kwargs = _metadata_context_kwargs(matched.get('context'))
+        add_item(label, 'browse_rd_torrent', True, context=context, art=matched.get('art'), info=matched.get('info'),
+                 torrent_id=item.get('id'), prefix='', **kwargs)
     end('files')
 
 
@@ -1982,20 +2033,40 @@ def _folder_entries(files, prefix):
     return folders, direct
 
 
-def browse_rd_torrent(torrent_id, prefix=''):
+def browse_rd_torrent(torrent_id, prefix='', meta_type='', meta_title='', meta_imdb='', meta_year='', meta_season=''):
     rd = RealDebrid()
     try:
         info = rd.torrent_info(torrent_id)
     except Exception as exc:
         xbmcgui.Dialog().ok(ADDON_NAME, 'Could not open Real-Debrid torrent:\n%s' % exc)
         return
-    folders, files = _folder_entries(info.get('files') or [], prefix)
-    for name in sorted(folders, key=str.lower):
+    all_files = info.get('files') or []
+    folders, files = _folder_entries(all_files, prefix)
+    parent_name = info.get('filename') or info.get('name') or ''
+    metadata_parent = os.path.basename(clean_path(prefix)) if prefix else parent_name
+    series_hint = looks_like_series_tree(all_files)
+    known_context = _metadata_context(meta_type, meta_title, meta_imdb, meta_year, meta_season)
+    folder_metadata = match_entries(list(folders.keys()), parent_name=metadata_parent,
+                                    root_name=parent_name, container=True,
+                                    series_hint=series_hint, provider='rd',
+                                    known_context=known_context)
+    file_metadata = match_entries([os.path.basename(f['_path']) for f in files if is_video(os.path.basename(f['_path']))],
+                                  parent_name=metadata_parent, root_name=parent_name,
+                                  series_hint=series_hint, provider='rd',
+                                  known_context=known_context)
+    sort_key = lambda value: media_sort_key(value, parent_name=metadata_parent,
+                                             root_name=parent_name, known_context=known_context)
+    for name in sorted(folders, key=sort_key):
         folder_prefix = folders[name]
+        matched = folder_metadata.get(name, {})
+        child_context = _child_metadata_context(matched, known_context)
         ctx = _pin_context('pin_account', kind='rd_folder', provider='rd', label=name + '/',
                            torrent_id=torrent_id, prefix=folder_prefix)
-        add_item(name + '/', 'browse_rd_torrent', True, context=ctx, torrent_id=torrent_id, prefix=folder_prefix)
-    for f in sorted(files, key=lambda x: x['_path'].lower()):
+        kwargs = _metadata_context_kwargs(child_context)
+        add_item(name + '/', 'browse_rd_torrent', True, context=ctx,
+                 art=matched.get('art'), info=matched.get('info'),
+                 torrent_id=torrent_id, prefix=folder_prefix, **kwargs)
+    for f in sorted(files, key=lambda x: sort_key(os.path.basename(x['_path']))):
         name = os.path.basename(f['_path'])
         label = name + ('  %s' % human_size(f.get('bytes')) if f.get('bytes') else '')
         if not f.get('selected'):
@@ -2006,7 +2077,9 @@ def browse_rd_torrent(torrent_id, prefix=''):
         ctx += _pin_context('pin_account', kind='rd_file', provider='rd', label=label, torrent_id=torrent_id,
                             file_id=f.get('id'), filename=name)
         action = 'play_rd_file' if is_video(name) and f.get('selected') else 'file_info'
-        add_item(label, action, False, context=ctx, torrent_id=torrent_id, file_id=f.get('id'), filename=name,
+        matched = file_metadata.get(name, {})
+        add_item(label, action, False, context=ctx, art=matched.get('art'), info=matched.get('info'),
+                 torrent_id=torrent_id, file_id=f.get('id'), filename=name,
                  message=('This file was not selected/downloaded in Real-Debrid.' if not f.get('selected') else 'Use the context menu to download this non-video file.'))
     end('files')
 
@@ -2037,15 +2110,21 @@ def rd_downloads():
     except Exception as exc:
         xbmcgui.Dialog().ok(ADDON_NAME, 'Could not load Real-Debrid downloads:\n%s' % exc)
         return
+    update_account_item_count('rd', 'downloads', len(downloads))
     sid = save_session({'rd_downloads': downloads})
+    metadata = match_entries([item.get('filename') or '' for item in downloads if is_video(item.get('filename') or '')],
+                             provider='rd')
     for idx, item in enumerate(downloads):
-        name = item.get('filename') or item.get('host') or str(item.get('id'))
+        raw_name = item.get('filename') or ''
+        matched = metadata.get(raw_name, {})
+        name = raw_name or item.get('host') or str(item.get('id'))
         if item.get('filesize'):
             name += '  %s' % human_size(item.get('filesize'))
         ctx = [('Download', 'RunPlugin(%s)' % plugin_url(BASE, action='download_rd_download', session=sid, index=idx))]
         ctx += _pin_context('pin_account', kind='rd_download', provider='rd', label=name,
                             download_id=item.get('id'), filename=item.get('filename') or '')
-        add_item(name, 'play_rd_download', False, context=ctx, session=sid, index=idx)
+        add_item(name, 'play_rd_download', False, context=ctx, art=matched.get('art'), info=matched.get('info'),
+                 session=sid, index=idx)
     end('files')
 
 
@@ -2101,9 +2180,20 @@ def tb_items(item_type):
     except Exception as exc:
         xbmcgui.Dialog().ok(ADDON_NAME, 'Could not load TorBox %s items:\n%s' % (item_type, exc))
         return
+    update_account_item_count('tb', item_type, len(items))
+    names = [item.get('name') or item.get('torrent_name') or '' for item in items]
+    series_names = [item.get('name') or item.get('torrent_name') or '' for item in items
+                    if looks_like_series_tree(item.get('files') or [])]
+    series_set = set(series_names)
+    metadata = match_entries([name for name in names if name not in series_set],
+                             container=True, provider='tb')
+    if series_names:
+        metadata.update(match_entries(series_names, container=True, series_hint=True, provider='tb'))
     for item in items:
         item_id = item.get('id') or item.get('%s_id' % item_type) or item.get('torrent_id') or item.get('usenet_id') or item.get('webdownload_id')
-        name = item.get('name') or item.get('torrent_name') or item.get('hash') or str(item_id)
+        raw_name = item.get('name') or item.get('torrent_name') or ''
+        matched = metadata.get(raw_name, {})
+        name = raw_name or item.get('hash') or str(item_id)
         state = item.get('download_state') or ''
         if state:
             name += '  [%s]' % state
@@ -2116,7 +2206,9 @@ def tb_items(item_type):
                 BASE, action='delete_tb_torrent', torrent_id=item_id)))
         context += _pin_context('pin_account', kind='tb_item', provider='tb', label=name,
                                 item_type=item_type, item_id=item_id)
-        add_item(name, 'browse_tb_item', True, context=context, item_type=item_type, item_id=item_id, prefix='')
+        kwargs = _metadata_context_kwargs(matched.get('context'))
+        add_item(name, 'browse_tb_item', True, context=context, art=matched.get('art'), info=matched.get('info'),
+                 item_type=item_type, item_id=item_id, prefix='', **kwargs)
     end('files')
 
 
@@ -2130,20 +2222,40 @@ def _tb_info(tb, item_type, item_id):
     return result or {}
 
 
-def browse_tb_item(item_type, item_id, prefix=''):
+def browse_tb_item(item_type, item_id, prefix='', meta_type='', meta_title='', meta_imdb='', meta_year='', meta_season=''):
     tb = TorBox()
     try:
         info = _tb_info(tb, item_type, item_id)
     except Exception as exc:
         xbmcgui.Dialog().ok(ADDON_NAME, 'Could not open TorBox item:\n%s' % exc)
         return
-    folders, files = _folder_entries(info.get('files') or [], prefix)
-    for name in sorted(folders, key=str.lower):
+    all_files = info.get('files') or []
+    folders, files = _folder_entries(all_files, prefix)
+    parent_name = info.get('name') or info.get('torrent_name') or info.get('filename') or ''
+    metadata_parent = os.path.basename(clean_path(prefix)) if prefix else parent_name
+    series_hint = looks_like_series_tree(all_files)
+    known_context = _metadata_context(meta_type, meta_title, meta_imdb, meta_year, meta_season)
+    folder_metadata = match_entries(list(folders.keys()), parent_name=metadata_parent,
+                                    root_name=parent_name, container=True,
+                                    series_hint=series_hint, provider='tb',
+                                    known_context=known_context)
+    file_metadata = match_entries([os.path.basename(f['_path']) for f in files if is_video(os.path.basename(f['_path']))],
+                                  parent_name=metadata_parent, root_name=parent_name,
+                                  series_hint=series_hint, provider='tb',
+                                  known_context=known_context)
+    sort_key = lambda value: media_sort_key(value, parent_name=metadata_parent,
+                                             root_name=parent_name, known_context=known_context)
+    for name in sorted(folders, key=sort_key):
         folder_prefix = folders[name]
+        matched = folder_metadata.get(name, {})
+        child_context = _child_metadata_context(matched, known_context)
         ctx = _pin_context('pin_account', kind='tb_folder', provider='tb', label=name + '/', item_type=item_type,
                            item_id=item_id, prefix=folder_prefix)
-        add_item(name + '/', 'browse_tb_item', True, context=ctx, item_type=item_type, item_id=item_id, prefix=folder_prefix)
-    for f in sorted(files, key=lambda x: x['_path'].lower()):
+        kwargs = _metadata_context_kwargs(child_context)
+        add_item(name + '/', 'browse_tb_item', True, context=ctx,
+                 art=matched.get('art'), info=matched.get('info'),
+                 item_type=item_type, item_id=item_id, prefix=folder_prefix, **kwargs)
+    for f in sorted(files, key=lambda x: sort_key(os.path.basename(x['_path']))):
         name = os.path.basename(f['_path'])
         size = f.get('size') or f.get('bytes')
         label = name + ('  %s' % human_size(size) if size else '')
@@ -2152,7 +2264,9 @@ def browse_tb_item(item_type, item_id, prefix=''):
         ctx += _pin_context('pin_account', kind='tb_file', provider='tb', label=label, item_type=item_type,
                             item_id=item_id, file_id=f.get('id'), filename=name)
         action = 'play_tb_file' if is_video(name) else 'file_info'
-        add_item(label, action, False, context=ctx, item_type=item_type, item_id=item_id, file_id=f.get('id'), filename=name,
+        matched = file_metadata.get(name, {})
+        add_item(label, action, False, context=ctx, art=matched.get('art'), info=matched.get('info'),
+                 item_type=item_type, item_id=item_id, file_id=f.get('id'), filename=name,
                  message=('Archive file: use Download from the context menu.' if is_archive(name) else 'Use the context menu to download this non-video file.'))
     end('files')
 
@@ -2206,11 +2320,22 @@ def cloud_torrents(provider):
     except Exception as exc:
         xbmcgui.Dialog().ok(ADDON_NAME, 'Could not load provider torrents:\n%s' % exc)
         return
+    update_account_item_count(provider, 'torrents', len(items))
+    names = [item.get('filename') or item.get('name') or '' for item in items]
+    series_names = [item.get('filename') or item.get('name') or '' for item in items
+                    if looks_like_series_tree(item.get('files') or [])]
+    series_set = set(series_names)
+    metadata = match_entries([name for name in names if name not in series_set],
+                             container=True, provider=provider)
+    if series_names:
+        metadata.update(match_entries(series_names, container=True, series_hint=True, provider=provider))
     for item in items:
         item_id = item.get('torrentid') or item.get('id') or item.get('torrent_id') or item.get('tid')
         if item_id is None:
             continue
-        label = item.get('filename') or item.get('name') or item.get('hash') or str(item_id)
+        raw_name = item.get('filename') or item.get('name') or ''
+        matched = metadata.get(raw_name, {})
+        label = raw_name or item.get('hash') or str(item_id)
         status = item.get('status') or item.get('state') or ''
         if status:
             label += '  [%s]' % status
@@ -2221,26 +2346,46 @@ def cloud_torrents(provider):
             BASE, action='delete_cloud_torrent', provider=provider, torrent_id=item_id))]
         ctx += _pin_context('pin_account', kind='cloud_torrent', provider=provider,
                             label=label, torrent_id=item_id)
-        add_item(label, 'browse_cloud_torrent', True, context=ctx,
-                 provider=provider, torrent_id=item_id, prefix='')
+        kwargs = _metadata_context_kwargs(matched.get('context'))
+        add_item(label, 'browse_cloud_torrent', True, context=ctx, art=matched.get('art'), info=matched.get('info'),
+                 provider=provider, torrent_id=item_id, prefix='', **kwargs)
     end('files')
 
 
-def browse_cloud_torrent(provider, torrent_id, prefix=''):
+def browse_cloud_torrent(provider, torrent_id, prefix='', meta_type='', meta_title='', meta_imdb='', meta_year='', meta_season=''):
     try:
         client = _native_cloud_client(provider)
         info = client.torrent_info(torrent_id)
     except Exception as exc:
         xbmcgui.Dialog().ok(ADDON_NAME, 'Could not open provider torrent:\n%s' % exc)
         return
-    folders, files = _folder_entries(info.get('files') or [], prefix)
-    for name in sorted(folders, key=str.lower):
+    all_files = info.get('files') or []
+    folders, files = _folder_entries(all_files, prefix)
+    parent_name = info.get('filename') or info.get('name') or ''
+    metadata_parent = os.path.basename(clean_path(prefix)) if prefix else parent_name
+    series_hint = looks_like_series_tree(all_files)
+    known_context = _metadata_context(meta_type, meta_title, meta_imdb, meta_year, meta_season)
+    folder_metadata = match_entries(list(folders.keys()), parent_name=metadata_parent,
+                                    root_name=parent_name, container=True,
+                                    series_hint=series_hint, provider=provider,
+                                    known_context=known_context)
+    file_metadata = match_entries([os.path.basename(f['_path']) for f in files if is_video(os.path.basename(f['_path']))],
+                                  parent_name=metadata_parent, root_name=parent_name,
+                                  series_hint=series_hint, provider=provider,
+                                  known_context=known_context)
+    sort_key = lambda value: media_sort_key(value, parent_name=metadata_parent,
+                                             root_name=parent_name, known_context=known_context)
+    for name in sorted(folders, key=sort_key):
         folder_prefix = folders[name]
+        matched = folder_metadata.get(name, {})
+        child_context = _child_metadata_context(matched, known_context)
         ctx = _pin_context('pin_account', kind='cloud_folder', provider=provider,
                            label=name + '/', torrent_id=torrent_id, prefix=folder_prefix)
+        kwargs = _metadata_context_kwargs(child_context)
         add_item(name + '/', 'browse_cloud_torrent', True, context=ctx,
-                 provider=provider, torrent_id=torrent_id, prefix=folder_prefix)
-    for f in sorted(files, key=lambda x: x['_path'].lower()):
+                 art=matched.get('art'), info=matched.get('info'),
+                 provider=provider, torrent_id=torrent_id, prefix=folder_prefix, **kwargs)
+    for f in sorted(files, key=lambda x: sort_key(os.path.basename(x['_path']))):
         name = os.path.basename(f['_path'])
         size = f.get('size') or f.get('bytes')
         label = name + ('  %s' % human_size(size) if size else '')
@@ -2251,7 +2396,8 @@ def browse_cloud_torrent(provider, torrent_id, prefix=''):
         ctx += _pin_context('pin_account', kind='cloud_file', provider=provider,
                             label=label, torrent_id=torrent_id, file_id=file_id, filename=name)
         action = 'play_cloud_file' if is_video(name) else 'file_info'
-        add_item(label, action, False, context=ctx, provider=provider,
+        matched = file_metadata.get(name, {})
+        add_item(label, action, False, context=ctx, art=matched.get('art'), info=matched.get('info'), provider=provider,
                  torrent_id=torrent_id, file_id=file_id, filename=name,
                  message=('Archive file: use Download from the context menu.' if is_archive(name)
                           else 'Use the context menu to download this non-video file.'))
@@ -2298,21 +2444,43 @@ def pm_root():
     end_menu()
 
 
-def pm_folder(folder_id=''):
+def pm_folder(folder_id='', root_name='', parent_name='', meta_type='', meta_title='', meta_imdb='', meta_year='', meta_season=''):
     pm = Premiumize()
     try:
         data = pm.list_folder(folder_id)
     except Exception as exc:
         xbmcgui.Dialog().ok(ADDON_NAME, 'Could not load Premiumize.me cloud files:\n%s' % exc)
         return
-    for item in data.get('content') or []:
+    content = list(data.get('content') or [])
+    if not folder_id:
+        update_account_item_count('pm', 'cloud', len(content))
+    series_hint = looks_like_series_tree(content)
+    known_context = _metadata_context(meta_type, meta_title, meta_imdb, meta_year, meta_season)
+    folder_names = [item.get('name') or '' for item in content if item.get('type') == 'folder']
+    folder_metadata = match_entries(folder_names, parent_name=parent_name or root_name,
+                                    root_name=root_name, container=True,
+                                    series_hint=series_hint, provider='pm',
+                                    known_context=known_context)
+    file_metadata = match_entries([item.get('name') or '' for item in content
+                                   if item.get('type') != 'folder' and is_video(item.get('name') or '')],
+                                  parent_name=parent_name or root_name,
+                                  root_name=root_name, series_hint=series_hint,
+                                  provider='pm', known_context=known_context)
+    sort_key = lambda item: media_sort_key(item.get('name') or '', parent_name=parent_name or root_name,
+                                            root_name=root_name, known_context=known_context)
+    for item in sorted(content, key=sort_key):
         item_id = item.get('id')
         name = item.get('name') or str(item_id)
         if item.get('type') == 'folder':
+            matched = folder_metadata.get(name, {})
+            child_context = _child_metadata_context(matched, known_context)
             ctx = [('Delete folder', 'RunPlugin(%s)' % plugin_url(
                 BASE, action='delete_pm_item', entry_type='folder', item_id=item_id))]
             ctx += _pin_context('pin_account', kind='pm_folder', provider='pm', label=name + '/', folder_id=item_id)
-            add_item(name + '/', 'pm_folder', True, context=ctx, folder_id=item_id)
+            kwargs = _metadata_context_kwargs(child_context)
+            add_item(name + '/', 'pm_folder', True, context=ctx,
+                     art=matched.get('art'), info=matched.get('info'),
+                     folder_id=item_id, root_name=(root_name or name), parent_name=name, **kwargs)
         else:
             label = name + ('  %s' % human_size(item.get('size')) if item.get('size') else '')
             ctx = [('Download', 'RunPlugin(%s)' % plugin_url(BASE, action='download_pm_file', file_id=item_id)),
@@ -2320,7 +2488,9 @@ def pm_folder(folder_id=''):
             ctx += _pin_context('pin_account', kind='pm_file', provider='pm', label=label,
                                 file_id=item_id, filename=name)
             action = 'play_pm_file' if is_video(name) else 'file_info'
-            add_item(label, action, False, context=ctx, file_id=item_id, filename=name,
+            matched = file_metadata.get(name, {})
+            add_item(label, action, False, context=ctx, art=matched.get('art'), info=matched.get('info'),
+                     file_id=item_id, filename=name,
                      message=('Archive file: use Download from the context menu.' if is_archive(name)
                               else 'Use the context menu to download this non-video file.'))
     end('files')
@@ -2333,8 +2503,12 @@ def pm_transfers():
     except Exception as exc:
         xbmcgui.Dialog().ok(ADDON_NAME, 'Could not load Premiumize.me transfers:\n%s' % exc)
         return
+    update_account_item_count('pm', 'transfers', len(rows))
+    metadata = match_entries([item.get('name') or '' for item in rows if item.get('file_id') and is_video(item.get('name') or '')],
+                             provider='pm')
     for item in rows:
         transfer_id = item.get('id')
+        matched = metadata.get(item.get('name') or '', {})
         label = item.get('name') or str(transfer_id)
         status = item.get('status') or ''
         if status:
@@ -2349,9 +2523,12 @@ def pm_transfers():
         ctx += _pin_context('pin_account', kind='pm_transfer', provider='pm', label=label,
                             item_id=transfer_id, folder_id=item.get('folder_id'), file_id=item.get('file_id'))
         if item.get('folder_id'):
-            add_item(label, 'pm_folder', True, context=ctx, folder_id=item.get('folder_id'))
+            kwargs = _metadata_context_kwargs(matched.get('context'))
+            add_item(label, 'pm_folder', True, context=ctx, folder_id=item.get('folder_id'),
+                     root_name=item.get('name') or '', parent_name=item.get('name') or '', **kwargs)
         elif item.get('file_id'):
-            add_item(label, 'play_pm_file', False, context=ctx, file_id=item.get('file_id'), filename=item.get('name') or '')
+            add_item(label, 'play_pm_file', False, context=ctx, art=matched.get('art'), info=matched.get('info'),
+                     file_id=item.get('file_id'), filename=item.get('name') or '')
         else:
             add_item(label, 'file_info', False, context=ctx, playable=False,
                      message=item.get('message') or 'Transfer is not yet available as a cloud file.')
@@ -2437,6 +2614,11 @@ def open_resolveurl_settings():
         ResolveURLBridge().display_settings()
     except Exception as exc:
         xbmcgui.Dialog().ok(ADDON_NAME, 'Could not open ResolveURL settings:\n%s' % exc)
+
+
+def clear_metadata_cache():
+    clear_account_metadata_cache()
+    notify('Account metadata cache cleared.')
 
 
 def resolveurl_provider_info(provider='ResolveURL provider'):
@@ -2546,7 +2728,9 @@ def run():
         elif action == 'rd_torrents':
             rd_torrents()
         elif action == 'browse_rd_torrent':
-            browse_rd_torrent(p['torrent_id'], p.get('prefix', ''))
+            browse_rd_torrent(p['torrent_id'], p.get('prefix', ''),
+                              p.get('meta_type', ''), p.get('meta_title', ''), p.get('meta_imdb', ''),
+                              p.get('meta_year', ''), p.get('meta_season', ''))
         elif action == 'play_rd_file':
             play_rd_file(p['torrent_id'], p['file_id'], p.get('filename', ''))
         elif action == 'download_rd_file':
@@ -2562,7 +2746,9 @@ def run():
         elif action == 'tb_items':
             tb_items(p['item_type'])
         elif action == 'browse_tb_item':
-            browse_tb_item(p['item_type'], p['item_id'], p.get('prefix', ''))
+            browse_tb_item(p['item_type'], p['item_id'], p.get('prefix', ''),
+                           p.get('meta_type', ''), p.get('meta_title', ''), p.get('meta_imdb', ''),
+                           p.get('meta_year', ''), p.get('meta_season', ''))
         elif action == 'play_tb_file':
             play_tb_file(p['item_type'], p['item_id'], p['file_id'], p.get('filename', ''))
         elif action == 'download_tb_file':
@@ -2576,7 +2762,9 @@ def run():
         elif action == 'cloud_torrents':
             cloud_torrents(p['provider'])
         elif action == 'browse_cloud_torrent':
-            browse_cloud_torrent(p['provider'], p['torrent_id'], p.get('prefix', ''))
+            browse_cloud_torrent(p['provider'], p['torrent_id'], p.get('prefix', ''),
+                                 p.get('meta_type', ''), p.get('meta_title', ''), p.get('meta_imdb', ''),
+                                 p.get('meta_year', ''), p.get('meta_season', ''))
         elif action == 'play_cloud_file':
             play_cloud_file(p['provider'], p['torrent_id'], p['file_id'], p.get('filename', ''))
         elif action == 'download_cloud_file':
@@ -2586,7 +2774,9 @@ def run():
         elif action == 'pm_root':
             pm_root()
         elif action == 'pm_folder':
-            pm_folder(p.get('folder_id', ''))
+            pm_folder(p.get('folder_id', ''), p.get('root_name', ''), p.get('parent_name', ''),
+                      p.get('meta_type', ''), p.get('meta_title', ''), p.get('meta_imdb', ''),
+                      p.get('meta_year', ''), p.get('meta_season', ''))
         elif action == 'pm_transfers':
             pm_transfers()
         elif action == 'play_pm_file':
@@ -2613,6 +2803,8 @@ def run():
             file_info(p.get('message', 'This file is not directly playable.'))
         elif action == 'open_settings':
             ADDON.openSettings()
+        elif action == 'clear_metadata_cache':
+            clear_metadata_cache()
         elif action == 'reset_defaults':
             reset_defaults()
         else:

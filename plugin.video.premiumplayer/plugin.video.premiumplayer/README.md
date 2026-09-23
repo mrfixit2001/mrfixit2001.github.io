@@ -82,7 +82,9 @@ When source playback or a local download temporarily adds a torrent to TorBox, P
 
 ## Cache behavior
 
-Premium Player avoids persistent source-result and metadata caching where practical. Search history and user-created pins are intentionally retained. Temporary source lists are retained only to support navigation and playback behavior and are replaced when a new search begins.
+Premium Player avoids persistent source-result caching where practical. Search history and user-created pins are intentionally retained. Temporary source lists are retained only to support navigation and playback behavior and are replaced when a new search begins.
+
+Account-browser movie/TV metadata uses a small persistent cache keyed separately by provider account type (for example TorBox vs Real-Debrid). Only successful metadata resolutions are retained. Each provider collection tracks its observed item count; when that count changes, that provider's metadata matches are discarded and rebuilt. The entire account metadata cache can also be cleared manually from **Settings > Maintenance > Clear metadata cache**.
 
 New Releases uses temporary Kodi cache storage for navigation performance. Derived Movie/TV genre result sets are cleared at the shared `New Releases` menu boundary. TV schedule acquisition is cached separately as a rolling 30-day All-Genres provider pool: genre selections filter that pool locally, today's schedule is refreshed frequently, and older daily schedule responses are reused for progressively longer intervals because historical premiere schedules are largely stable. This prevents every genre selection or daily refresh from repeating the full 30-day TVmaze crawl.
 
@@ -183,3 +185,6 @@ The user—not Premium Player, its authors, contributors, or maintainers—is re
 Premium Player is licensed under the MIT License. See [`LICENSE.txt`](LICENSE.txt) for the complete license terms.
 
 Copyright © 2026 Premium Player contributors.
+
+### Account browser metadata (0.2.29)
+When browsing files already present in supported ResolveURL-backed accounts, Premium Player attempts conservative movie/TV identification for display metadata only. Once a series is positively identified, its canonical title/IMDb identity is inherited by lower folders so episode files do not need to re-identify the show at every level. Episode parsing accepts standard forms such as `S01E04`, `1x04`, and common imperfect forms such as `S1-4`; matching media entries are ordered numerically by parsed season/episode rather than raw filename text. Movie matches still require an exact normalized title plus matching four-digit year, and uncertain items remain unchanged. This does not alter provider resolution or playback URLs.

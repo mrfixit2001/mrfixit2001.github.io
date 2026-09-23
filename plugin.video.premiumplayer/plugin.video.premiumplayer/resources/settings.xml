@@ -27,6 +27,8 @@
   </category>
 
   <category label="Maintenance">
+    <setting id="clear_metadata_cache" type="action" label="Clear metadata cache"
+             action="RunPlugin(plugin://plugin.video.premiumplayer/?action=clear_metadata_cache)" option="close" />
     <setting id="reset_defaults" type="action" label="Reset all settings to defaults"
              action="RunPlugin(plugin://plugin.video.premiumplayer/?action=reset_defaults)" option="close" />
     <setting type="lsep" label="ResolveURL account authorizations are managed separately and are not reset" />

@@ -3,6 +3,7 @@ import base64
 import datetime
 import re
 import time
+from urllib import parse
 
 import xbmc
 import xbmcaddon
@@ -349,14 +350,29 @@ class TorBox:
         result = self.get('/webdl/mylist', {'limit': 1000})
         return result if isinstance(result, list) else ([] if not result else [result])
 
+    @staticmethod
+    def _kodi_safe_url(url):
+        """Percent-encode characters Kodi/libcurl rejects without disturbing URL delimiters."""
+        if not url:
+            return url
+        parts = parse.urlsplit(str(url).strip())
+        path = parse.quote(parts.path, safe="/%:@!$&'()*+,;=-._~")
+        query = parse.quote(parts.query, safe="=&%:@!$'()*+,;/?-._~")
+        fragment = parse.quote(parts.fragment, safe="%:@!$&'()*+,;=/?-._~")
+        return parse.urlunsplit((parts.scheme, parts.netloc, path, query, fragment))
+
     def request_file(self, item_type, item_id, file_id):
         endpoint = {'torrent': '/torrents/requestdl', 'usenet': '/usenet/requestdl', 'web': '/webdl/requestdl'}[item_type]
         id_key = {'torrent': 'torrent_id', 'usenet': 'usenet_id', 'web': 'web_id'}[item_type]
-        params = {'token': self.token, id_key: int(item_id), 'file_id': int(file_id), 'redirect': 'false', 'append_name': 'true'}
+        # The filename is already known to Kodi and to the local downloader.
+        # Asking TorBox to append it to the CDN URL can return literal spaces in
+        # the query string, which Kodi's libcurl rejects as CURLE_URL_MALFORMAT.
+        params = {'token': self.token, id_key: int(item_id), 'file_id': int(file_id),
+                  'redirect': 'false', 'append_name': 'false'}
         result = self.get(endpoint, params=params)
         if isinstance(result, dict):
-            return result.get('url') or result.get('download') or result.get('link')
-        return result
+            result = result.get('url') or result.get('download') or result.get('link')
+        return self._kodi_safe_url(result)
 
     def resolve_source(self, source, media, wait_seconds=120, track_cleanup=False, cancel_cb=None):
         torrent_id = None
