@@ -387,6 +387,7 @@ class TorBoxResolver(ResolveUrl):
         self.set_setting('apikey', '')
 
     def authorize_resolver(self):
+        self.__device_token = ''
         url = self.api_url + '/user/auth/device/start?app=ResolveUrl'
         js_data = self.net.http_GET(url, headers=self.headers).json
         js_data = js_data.get('data')
@@ -402,7 +403,19 @@ class TorBoxResolver(ResolveUrl):
         # cancelled
         if result is None:
             return
+
+        # The successful poll already carried the token; the device code
+        # cannot be used a second time.
+        if self.__device_token:
+            return True
+
         return self.__get_token(js_data.get('device_code'))
+
+    def __save_token(self, token):
+        logger.log_debug('Authorizing TorBox Result: |{0}|'.format(token))
+        self.set_setting('apikey', token)
+        self.headers.update({'Authorization': 'Bearer {0}'.format(token)})
+        self.__device_token = token
 
     def __get_token(self, device_code):
         url = self.api_url + '/user/auth/device/token'
@@ -412,9 +425,7 @@ class TorBoxResolver(ResolveUrl):
             if js_data.get("success"):
                 js_data = js_data.get('data')
                 token = js_data.get('access_token', '')
-                logger.log_debug('Authorizing TorBox Result: |{0}|'.format(token))
-                self.set_setting('apikey', token)
-                self.headers.update({'Authorization': 'Bearer {0}'.format(token)})
+                self.__save_token(token)
                 return True
         except Exception as e:
             logger.log_debug('TorBox Authorization Failed: {0}'.format(e))
@@ -427,6 +438,9 @@ class TorBoxResolver(ResolveUrl):
         try:
             js_data = self.net.http_POST(url, form_data=data, headers=self.headers, jdata=True).json
             if js_data.get("success"):
+                token = (js_data.get('data') or {}).get('access_token', '')
+                if token:
+                    self.__save_token(token)
                 activated = True
         except Exception as e:
             logger.log_debug('Exception during TB auth: {0}'.format(e))

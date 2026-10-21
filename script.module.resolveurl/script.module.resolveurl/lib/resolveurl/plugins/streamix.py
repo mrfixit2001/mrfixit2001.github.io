@@ -25,8 +25,17 @@ from resolveurl.resolver import ResolveUrl, ResolverError
 
 class StreamixResolver(ResolveUrl):
     name = 'Streamix'
-    domains = ['streamix.so', 'stmix.io', 'vidara.so', 'vidara.to', 'vidaraa.cc']
-    pattern = r'(?://|\.)((?:st(?:rea)?mix|vidara*)\.(?:so|io|to|cc))/(?:e|v)/([0-9a-zA-Z]+)'
+    domains = [
+        'streamix.so', 'stmix.io', 'vidara.so', 'vidara.to', 'vidaraa.cc', 'vidmatrixa.com',
+        'kinoger.pw', 'viewdara.com', 'thebesthosterv.com', 'odysseusa.cc', 'ano.cx', 'vidwara.cc',
+        'vidwara.fit', 'vidvara.lol', 'vidvara.online', 'viderea.online', 'vidwara.biz', 'vidwara.art',
+        'vidwara.site', 'vidvara.site', 'vidvara.biz', 'vidvara.fit', 'ougbas.xyz',
+        'sufbgao.xyz', 'isbfga.online', 'isbfga.space', 'isbfga.store', 'sufbgao.space'
+    ]
+    pattern = (
+        r'(?://|\.)((?:st(?:rea)?mix|vid(?:[wv]?ar|matrix)a*|viewdara|thebesthosterv|kinoger|odysseusa|ano|viderea|ougbas|sufbgao|isbfga)'
+        r'\.(?:so|io|to|cc|com|pw|cx|fit|lol|online|biz|art|site|xyz|space|store))/(?:e/|v/)?([0-9a-zA-Z_-]+)'
+    )
 
     def get_media_url(self, host, media_id, subs=False):
         web_url = self.get_url(host, media_id)
@@ -51,6 +60,6 @@ class StreamixResolver(ResolveUrl):
         raise ResolverError("Unable to locate stream URL.")
 
     def get_url(self, host, media_id):
-        if 'vidara' not in host:
+        if host in ['streamix.so', 'stmix.io']:
             host = 'vidara.to'
         return self._default_get_url(host, media_id, template='https://{host}/api/stream')
